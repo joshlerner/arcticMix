@@ -12,8 +12,9 @@ class Field:
         self.data = data
         self.mgrid = mgrid
 
-    def visualize_maps(self, show=False):
+    def visualize_maps(self, log=True, show=False):
         data = self.data
+        data[self.mgrid['ocnmsk'][0,0] == 0] = np.nan
         (m, n, p) = np.shape(data)
         lons = self.mgrid['lon'][0,0]
         lats = self.mgrid['lat'][0,0]
@@ -23,14 +24,20 @@ class Field:
         verts = np.vstack([np.sin(theta), np.cos(theta)]).T
         circle = mpath.Path(verts * radius + center)
 
-        fig, axes = plt.subplots(int(p/4), 4, figsize=(16, 3*int(p/4)), subplot_kw={'projection': ccrs.NorthPolarStereo()})
+        fig, axes = plt.subplots(int(p/4), 4, figsize=(20, 5*int(p/4)), subplot_kw={'projection': ccrs.NorthPolarStereo()})
         for i, depth in enumerate(self.mgrid['zcell'][0,0]):
             if i < 4*int(p/4):
                 ax = axes[int(i/4), int(i%4)]
                 data_slice = data[:,:,i]
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    ax.pcolormesh(lons, lats, np.log10(data_slice), transform=ccrs.PlateCarree())
+                    if log:
+                        data_slice = np.log10(zero2Nan(data_slice))
+                        cmap = plt.get_cmap('viridis')
+                    else:
+                        cmap = plt.get_cmap('coolwarm')
+                plt.set_cmap(cmap)
+                ax.pcolormesh(lons, lats, data_slice, transform=ccrs.PlateCarree())
                 ax.set_extent([-180, 180, 90, 60], ccrs.PlateCarree())
                 ax.coastlines()
                 ax.gridlines(lw=1, ls=':', draw_labels=True, rotate_labels=False, xlocs=np.linspace(-180, 180, 13), ylocs=[])
@@ -133,7 +140,7 @@ class RegionalField(Field):
             plt.close()
         return fig
         
-    def visualize_distributions(self, show=False):
+    def visualize_distributions(self, log=True, show=False):
         data = self.data
         (m, n, p) = np.shape(data)
         fig, axes = plt.subplots(int(p/4), 4, figsize=(12, 3*int(p/4)))
@@ -144,13 +151,18 @@ class RegionalField(Field):
                 data_slice = data[:,:,i]
                 for j, key in enumerate(['CB', 'EB', 'shelf', 'slope']):
                     msk = (np.isnan(data_slice) == False) & (self.reg_logic[key][:,:,i] == True)
-                    x = np.log10(data_slice[msk])
-                    if len(x) != 0: 
-                        n_bin = int((np.max(x) - np.min(x))/0.2)+1
-                        ax.hist(x, bins=n_bin, histtype='stepfilled', label=key, ec=colors[j], fc=np.append(colors[j][:-1], 0.3))
+                    x = data_slice[msk]
+                    if log:
+                        x = np.log10(zero2Nan(x))
+                    if len(x) != 0:
+                        try:
+                            n_bin = int((np.nanmax(x) - np.nanmin(x))/0.2)+1
+                            ax.hist(x, bins=n_bin, histtype='stepfilled', label=key, ec=colors[j], fc=np.append(colors[j][:-1], 0.3))
+                        except:
+                            n_bin = 0
                 ax.set_title(f'z = {np.abs(depth[0]):.3}')
                 ax.set_xlabel(self.name)
-    
+                
         axes[0,3].legend(loc='center right', bbox_to_anchor=(1.5, 0.5))
 
         st = plt.suptitle(f'{self.name} Distribution by Depth')
@@ -196,7 +208,8 @@ class KappaBG(RegionalField):
         return kappa
 
 class Transect:
-    def __init__(self, mgrid, p1, p2, proj=ccrs.NorthPolarStereo()):
+    def __init__(self, name, mgrid, p1, p2, proj=ccrs.NorthPolarStereo()):
+        self.name = name
         self.proj = proj
         self.base = ccrs.PlateCarree()
         self.__initializeCoords(p1, p2)
@@ -247,22 +260,32 @@ class Transect:
         for d in range(len(depths)):
             fld_slice = Field.data[:,:,d]
             if log:
-                fld_slice = np.log10(fld_slice)
+                fld_slice = np.log10(zero2Nan(fld_slice))
             fld_slice[ocnmask[:,:,d] == 0] = np.nan
             trans_fld[d,:] = fld_slice.flatten()[self.trans_idx]
         
         X, Y = np.meshgrid(self.trans_dist, depths)
         
         plt.gca().set_facecolor('dimgrey')
-        plt.contourf(X, Y, trans_fld)
+        if log:
+            cmap = 'viridis'
+        else:
+            cmap = 'coolwarm'
+        try:
+            lev = np.arange(np.nanmin(trans_fld),np.nanmax(trans_fld), 0.1)
+            plt.contourf(X, Y, trans_fld, lev, cmap=cmap)
+        except:
+            plt.contourf(X, Y, trans_fld, cmap=cmap)
         ymin = depths[np.count_nonzero(np.nansum(trans_fld,1)) + 1] - 100
         ymax = -10
         plt.ylim((ymin, ymax))
         
-        plt.colorbar()
+        cbar = plt.colorbar()
+        cbar.set_label(Field.name)
         plt.xlabel('Along-Track Distance (km)')
         plt.ylabel('Depth (m)')
         plt.yscale('symlog')
+        plt.title(Field.name + ' along ' + self.name)
         
         if show:
             plt.tight_layout()
@@ -285,6 +308,8 @@ class Transect:
         ax.set_boundary(circle, transform=ax.transAxes)
         ax.plot(self.line[:,0], self.line[:,1], 'r')
         ax.set_extent([-180, 180, 90, 60], self.base)
+        
+        plt.title(self.name)
         
         if show:
             plt.tight_layout()
