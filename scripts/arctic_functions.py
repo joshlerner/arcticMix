@@ -97,3 +97,100 @@ def compute_mean(arr, w=None):
                     w_sum = w_sum + w[i,j,k]
                     arr_sum = arr_sum + arr[i,j,k]*w[i,j,k]
     return arr_sum/w_sum
+
+def makeRegions(grid):
+    """
+    Create regional logical arrays for the
+    * Eurasian Basin (EB), 
+    * Canadian Basin (CB), 
+    * Shelf (shelf), 
+    * Slope (slope), 
+    * Arctic Ocean (ARC), and 
+    * North Atlantic Ocean (NAt)
+    
+    Parameters
+    ----------
+    grid : dict
+        A dictionary of grid information such as cell coordinates
+        
+    Returns
+    -------
+    dict
+        A dictionary of regional logical 3darrays with keys in parenthesis above
+    """
+    ocnmsk = grid['ocnmsk']
+    depths = grid['zcell']
+    lats = grid['lat']
+    lons = grid['lon']
+    m, n, p = np.shape(ocnmsk)
+    reg_logic = {}
+    for key in ['ARC', 'EB', 'CB', 'shelf', 'slope', 'NAt']:
+        reg_logic[key] = np.zeros((m, n, p))
+    
+    def isNAt(lat, lon, depth):
+        if depth < 0:
+            if (lat < 80 and lon > -50 and lon < 20):
+                return True
+            if (lat < 68 and (lon < -150 or lon > 170)):
+                return True
+        return False
+    
+    def isEB(lat, lon, depth):
+        if (lon > -60 and lon < 140):
+            if (lat > 80 and depth < -3000):
+                return True
+            if lat > 85:
+                return True
+        return False
+    
+    def isCB(lat, lon, depth):
+        if(lon > -120 and lon < -60):
+            if (lat > 80 and depth < -3000):
+                return True
+            if lat > 85:
+                return True
+        if lon < -120:
+            if lat > 70 and depth < -3000:
+                return True
+            if lat > 80:
+                return True
+        if (lat > 82 and lon > 140):
+            return True
+        return False
+    
+    def isShelf(lat, lon, depth):
+        if depth > -500:
+            return True
+        if(lon > -90 and lon < -50 and lat < 80):
+            return True
+        return False
+    
+    for i in range(m):
+        for j in range(n):
+            for k in range(p):
+                if ocnmsk[i,j,k] == 0:
+                    lat = lats[i,j]
+                    lon = lons[i,j]
+                    depth = depths[k]
+                    if isNAt(lat, lon, depth):
+                        reg_logic['NAt'][i,j,:k] = 1
+                    else:
+                        reg_logic['ARC'][i,j,:k] = 1
+                        if isEB(lat, lon, depth):
+                            reg_logic['EB'][i,j,:k] = 1
+                        elif isCB(lat, lon, depth):
+                            reg_logic['CB'][i,j,:k] = 1
+                        elif isShelf(lat, lon, depth):
+                            reg_logic['shelf'][i,j,:k] = 1
+                        else:
+                            reg_logic['slope'][i,j,:k] = 1
+                    break
+    return reg_logic 
+    
+    
+    
+    
+    
+    
+    
+        
