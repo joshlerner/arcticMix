@@ -136,8 +136,8 @@ def makeRegions(grid):
         return False
     
     def isEB(lat, lon, depth):
-        if (lon > -60 and lon < 140):
-            if (lat > 80 and depth < -3000):
+        if (lon >= -60 and lon <= 140):
+            if (lat >= 80 and depth < -3000):
                 return True
             if lat > 85:
                 return True

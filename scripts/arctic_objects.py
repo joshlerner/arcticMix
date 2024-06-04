@@ -8,8 +8,9 @@ from scipy.spatial import KDTree
 import warnings
 
 class Field:
-    def __init__(self, name, grid, data, reg_logic=None):
+    def __init__(self, long, name, grid, data, reg_logic=None):
         self.name = name
+        self.long_name = long + name
         self.data = data
         self.grid = grid
         if reg_logic is None:
@@ -30,13 +31,13 @@ class Field:
             data = alt_data
         weights = self.grid['vol']
         weighted_means = {}
-        weighted_means['ARC'] = compute_mean(zero2Nan(data*self.reg_logic['ARC']), w=weights)
-        weighted_means['CB'] = compute_mean(zero2Nan(data*self.reg_logic['CB']), w=weights)
-        weighted_means['EB'] = compute_mean(zero2Nan(data*self.reg_logic['EB']), w=weights)
-        weighted_means['basin'] = compute_mean(zero2Nan(data*(self.reg_logic['CB'] + self.reg_logic['EB'])), w=weights)
-        weighted_means['shelf'] = compute_mean(zero2Nan(data*self.reg_logic['shelf']), w=weights)
-        weighted_means['slope'] = compute_mean(zero2Nan(data*self.reg_logic['slope']), w=weights)
-        
+        for key in ['ARC', 'CB', 'EB', 'basin', 'shelf', 'slope']:
+            if key == 'basin':
+                print(fr'Computing Basin Weighted Mean for {self.long_name}')
+                weighted_means['basin'] = compute_mean(zero2Nan(data*(self.reg_logic['CB'] + self.reg_logic['EB'])), w=weights)
+            else:
+                print(fr'Computing {key} Weighted Mean for {self.long_name}')
+                weighted_means[key] = compute_mean(zero2Nan(data*self.reg_logic[key]), w=weights)   
         if alt_data is None:
             self.weighted_means = weighted_means
         return weighted_means
@@ -50,20 +51,20 @@ class Field:
         else:
             data = alt_data
         means = {}
-        means['ARC'] = compute_mean(zero2Nan(data*self.reg_logic['ARC']))
-        means['CB'] = compute_mean(zero2Nan(data*self.reg_logic['CB']))
-        means['EB'] = compute_mean(zero2Nan(data*self.reg_logic['EB']))
-        means['basin'] = compute_mean(zero2Nan(data*(self.reg_logic['CB'] + self.reg_logic['EB'])))
-        means['shelf'] = compute_mean(zero2Nan(data*self.reg_logic['shelf']))
-        means['slope'] = compute_mean(zero2Nan(data*self.reg_logic['slope']))
-        
+        for key in ['ARC', 'CB', 'EB', 'basin', 'shelf', 'slope']:
+            if key == 'basin':
+                print(fr'Computing Basin Mean for {self.long_name}')
+                means['basin'] = compute_mean(zero2Nan(data*(self.reg_logic['CB'] + self.reg_logic['EB'])))
+            else:
+                print(fr'Computing {key} Mean for {self.long_name}')
+                means[key] = compute_mean(zero2Nan(data*self.reg_logic[key]))
         if alt_data is None:
             self.means = means
         return means
 
-    def visualize_average_profiles(self, log=True, show=False):
+    def visualize_regional_profile(self, log=True, show=False):
         data = self.data
-        weighted_means = self.getWeightedMeans(data)
+        weighted_means = self.getWeightedMeans()
         z_means = {}
         vec = np.ones((50,1))
         fig = plt.figure(figsize=(8, 10))
@@ -88,7 +89,7 @@ class Field:
         plt.gca().set_position([pos.x0, pos.y0, pos.width * 0.9, pos.height])
         plt.gca().legend(loc='center right', bbox_to_anchor=(1.25, 0.5))
     
-        plt.title(f'{self.name} Average Profile')
+        plt.title(f'{self.long_name} Average Profile')
         plt.tight_layout()
 
         if show:
@@ -124,7 +125,7 @@ class Field:
                 
         axes[0,3].legend(loc='center right', bbox_to_anchor=(1.5, 0.5))
 
-        st = plt.suptitle(f'{self.name} Distribution by Depth')
+        st = plt.suptitle(f'{self.long_name} Distribution by Depth')
     
         st.set_y(1)
         fig.subplots_adjust(top=0.85)
@@ -170,7 +171,7 @@ class Field:
                 ax.set_boundary(circle, transform=ax.transAxes)
                 ax.set_title(f'z = {np.abs(depth):.3}')
             
-        st = plt.suptitle(f'{self.name} Arctic Map')
+        st = plt.suptitle(f'{self.long_name} Arctic Map')
 
         st.set_y(1)
         fig.subplots_adjust(top=0.85)
@@ -184,8 +185,11 @@ class Field:
         
 class KappaBG(Field):
     def __init__(self, name, grid, obs_data, reg_logic, ver='OBS'):
-        super().__init__(name, grid, obs_data, reg_logic=reg_logic)
+        super().__init__(ver, name, grid, obs_data, reg_logic=reg_logic)
         self.data = self.__createKappa(ver)
+        self.weighted_means = None
+        self.means = None
+        
         
     def __createKappa(self, ver='OBS'):
         (m, n, p) = np.shape(self.data)
@@ -276,25 +280,26 @@ class Transect:
         plt.gca().set_facecolor('dimgrey')
         if log:
             cmap = 'viridis'
+            lev = np.linspace(np.floor(np.nanmin(trans_fld)-1),np.ceil(np.nanmax(trans_fld)+1), 50)
         else:
             cmap = 'coolwarm'
-
-        lev = np.linspace(np.floor(np.nanmin(trans_fld)),np.ceil(np.nanmax(trans_fld)), 50)
-        cs = plt.contourf(X, Y, trans_fld, lev, cmap=cmap)
+            lev = np.linspace(-1, 1, 50)
+        
+        cs = plt.contourf(X, Y, trans_fld, lev, cmap=cmap, extend='both')
         ymin = depths[np.count_nonzero(np.nansum(trans_fld,1)) + 1] - 100
         ymax = -10
         plt.ylim((ymin, ymax))
         
         cbar = plt.colorbar(cs)
         cbar.locator = ticker.AutoLocator()
-        cbar.set_ticks(cbar.locator.tick_values(np.nanmin(trans_fld), np.nanmax(trans_fld)))
+        cbar.set_ticks(cbar.locator.tick_values(lev[0], lev[-1]))
         if log:
             cbar.set_ticklabels([r'$10^{'+str(int(exp))+r'}$' for exp in cbar.get_ticks()])
         cbar.minorticks_off()
         cbar.set_label(Field.name)
         plt.xlabel('Along-Track Distance (km)')
         plt.ylabel('Depth (m)')
-        plt.title(Field.name + ' along ' + self.name)
+        plt.title(Field.long_name + ' along ' + self.name)
         plt.tight_layout()
         
         if show:
@@ -321,6 +326,46 @@ class Transect:
         plt.title(self.name)
         plt.tight_layout()
         
+        if show:
+            plt.show()
+        else:
+            plt.close()
+        return fig
+
+def visualize_average_profiles(fields, log=True, show=False):
+        z_means = {}
+        w_means = {}
+        for field in fields:
+            data = field.data
+            weighted_means = field.getWeightedMeans()
+            z_means[field.long_name] = {}
+            w_means[field.long_name] = weighted_means
+            for key in weighted_means.keys():
+                if key in field.reg_logic.keys():
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        z_means[field.long_name][key] = np.squeeze(np.nanmean(zero2Nan(data*field.reg_logic[key]), axis=(0,1)))
+        fig, axes = plt.subplots(1, 5, sharex=True, sharey=True, figsize=(30,10))
+        vec = np.ones((50,1))
+        plt.rcParams.update({'font.size': 22})
+        colors = plt.get_cmap('tab10')(np.arange(10, dtype=int))
+        for i, key in enumerate(z_means[list(z_means.keys())[0]].keys()):
+            for j, field in enumerate(fields):
+                axes[i].plot(z_means[field.long_name][key], field.grid['zcell'], color=colors[j], marker='o', label=field.long_name)
+                axes[i].plot(w_means[field.long_name][key]*vec, field.grid['zcell'], color=colors[j], linestyle='-.')
+                axes[i].set_title(key)
+                axes[i].set_yscale('symlog')
+                if log:
+                    axes[i].set_xscale('log')
+        
+        axes[-1].legend(loc='center right', bbox_to_anchor=(1.8, 0.5))
+        plt.xlabel(fields[0].name)
+        axes[0].set_ylabel('Depth (m)')
+        st = plt.suptitle(f'{fields[0].name} Average Profiles')
+        st.set_y(1)
+        fig.subplots_adjust(top=0.85)
+        plt.tight_layout()
+
         if show:
             plt.show()
         else:
