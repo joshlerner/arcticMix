@@ -8,7 +8,7 @@
 
 thishost=localhost
 jupyter-lab --no-browser --ip=$thishost --notebook-dir=$PWD >& jupyter_logbook.txt &
-sleep 15
+sleep 5
 echo ""
 echo ""
 echo "___________________________________________________________________"
