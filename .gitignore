@@ -2,3 +2,7 @@
 **/.DS_Store
 **/__pycache__
 **/.ipynb_checkpoints
+.ip.txt
+.jupyter_logbook.txt
+.start_jupyternotebook.sh
+.print_instructions.py
