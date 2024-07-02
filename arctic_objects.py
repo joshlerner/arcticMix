@@ -29,9 +29,9 @@ class Field:
     def __init__(self, desc, name, units, grid, data, reg_logic=None):
         self._name = name
         self._long_name = desc +' '+ name
-        self._data = data
         self._units = units
         self._grid = grid
+        self._data = zero2Nan(data*grid['ocnmsk'])
         if reg_logic is None:
             self._reg_logic = makeRegions(grid)
         else:
@@ -41,6 +41,23 @@ class Field:
         self._weighted_means = None
         self._geo_means = None
         self._weighted_geo_means = None
+        self._grid['vol'] = self._grid['vol']*self._reg_logic['ARC']
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def long_name(self):
+        return self._long_name
+
+    @property
+    def data(self):
+        return self._data
+
+    @property
+    def units(self):
+        return self._units
         
     def getMeans(self, weighted, geometric, alt_data=None):
         """Computes the regional means of a field, or loads precomputed means
@@ -96,62 +113,8 @@ class Field:
         if alt_data is None:
             ref = means
         return means
-
-    def getName(self, long=False):
-        """ Gets the name of the field
-
-        Parameters
-        ----------
-        self : Field
-            The field of data
-        long : boolean, default False
-            Whether to return the long name of the field
-
-        Returns
-        -------
-        str
-            The name of the field
-        """
-        if long:
-            return self._long_name
-        return self._name
     
-    def getData(self, maskas=None):
-        """ Gets the field data
-
-        Parameters
-        ----------
-        self : Field
-            The field of data
-        maskas : float, optional
-            The value to fill masked data
-
-        Returns
-        -------
-        3darray
-            A (masked) copy of the field data
-        """
-        cpy = np.copy(self._data)
-        if maskas:
-            cpy[self._grid['ocnmsk'] == 0] = maskas
-        return cpy
-    
-    def getUnits(self):
-        """ Gets the units of the field
-
-        Parameters
-        ----------
-        self : Field
-            The field of data
-
-        Returns
-        -------
-        str
-            The units of the field
-        """
-        return self._units
-    
-    def getGrid(self, key):
+    def grid(self, key):
         """ Gets the specified attribute of the field grid
 
         Parameters
@@ -176,7 +139,7 @@ class Field:
         else:
             raise KeyError(f"{key} is not a valid grid attribute.")
     
-    def getRegion(self, region):
+    def region(self, region):
         """ Gets the specified regional logical
 
         Parameters
@@ -201,7 +164,7 @@ class Field:
         else:
             raise KeyError(f"{region} is not a valid region.")
 
-    def visualize_regional_profile(self, weighted=True, geometric=False, scale=None, show=False, **kwargs):
+    def visualize_regional_profile(self, weighted=True, geometric=False, scale=None, show=True, **kwargs):
         """ Plots a vertical average profile for each region
 
         Parameters
@@ -274,7 +237,7 @@ class Field:
             plt.close()
         return fig
         
-    def visualize_distributions(self, scale=None, show=False, **kwargs):
+    def visualize_distributions(self, scale=None, show=True, **kwargs):
         """ Plots histograms of the field in each region for all depths
 
         Parameters
@@ -351,7 +314,7 @@ class Field:
             plt.close()
         return fig
 
-    def visualize_maps(self, scale=None, show=False, **kwargs):
+    def visualize_maps(self, scale=None, show=True, vmin=None, vmax=None, **kwargs):
         """ Plots maps of the field for all depths
 
         Parameters
@@ -377,20 +340,29 @@ class Field:
             warnings.simplefilter("ignore")
             if scale == 'symlog':
                 data = symlog10(zero2Nan(data))
-                cmap = plt.get_cmap('seismic')
-                vmax = np.max((np.nanpercentile(data, 99), -1*np.nanpercentile(data, 1)))
                 vmin = -1*vmax
             elif scale == 'log':
                 data = np.log10(zero2Nan(data))
-                cmap = plt.get_cmap('viridis')
-                vmax = np.nanpercentile(data, 99)
-                vmin = np.nanpercentile(data, 1)
-            else: 
-                cmap = plt.get_cmap('seismic')
-                vmax = np.max((np.nanpercentile(data, 99), -1*np.nanpercentile(data, 1)))
-                vmin = np.nanpercentile(data, 1)
-                if vmin < 0:
-                    vmin = -vmax
+            else:
+                data = zero2Nan(data)
+                
+        if vmin is None:
+            vmin = np.nanpercentile(data, 1)
+        if vmax is None:
+            vmax = np.nanpercentile(data, 99)
+
+        if scale == 'log':
+            cmap = 'viridis'
+        else:
+            if vmin < 0:
+                vmax = np.max((-vmin, vmax))
+                vmin = -vmax
+                cmap = 'seismic'
+            else:
+                cmap = 'viridis'
+        lev = np.linspace(vmin, vmax, 100)
+
+        
         lons = self._grid['lon']
         lats = self._grid['lat']
     
@@ -408,7 +380,7 @@ class Field:
                 data_slice = data[:,:,i]
                 plt.set_cmap(cmap)
                 if not np.all(np.isnan(data_slice)):
-                    pcm = ax.pcolormesh(lons, lats, data_slice, transform=ccrs.PlateCarree(), vmin=vmin-1, vmax=vmax+1, **kwargs)
+                    pcm = ax.pcolormesh(lons, lats, data_slice, transform=ccrs.PlateCarree(), vmin=vmin, vmax=vmax, **kwargs)
                     ax.set_extent([-180, 180, 90, 60], ccrs.PlateCarree())
                     ax.coastlines()
                     ax.gridlines(lw=1, ls=':', draw_labels=True, rotate_labels=False, xlocs=np.linspace(-180, 180, 13), ylocs=[])
@@ -483,7 +455,7 @@ class KappaBG(Field):
             return self._data
         kappa += self._reg_logic['NAt']*6.6e-6
         kappa = zero2Nan(kappa)
-        kappa[ocnmsk == 0] = np.nan
+        kappa = zero2Nan(kappa*ocnmsk)
         if np.any(np.equal(ocnmsk > 0, np.isnan(kappa))):
             print('Error: there are ocean grid cells that do not contain a kappa value')
         return kappa
@@ -555,7 +527,7 @@ class Transect:
             trans_dist[i] = trans_dist[i-1] + haversineDist(trans_array[i-1], trans_array[i])
         self.trans_dist = trans_dist
         
-    def visualize_transect(self, field, scale=None, vmin=None, vmax=None, show=False, **kwargs):
+    def visualize_transect(self, field, log=True, scale=None,  show=True, **kwargs):
         """ Plots the given field along the cross section
 
         Parameters
@@ -579,56 +551,62 @@ class Transect:
         fig
             A figure with a field along the cross section
         """
-        depths = self.grid['Depth'][:-1]
-        ocnmask = self.grid['ocnmsk']
+        depths = self.grid['Depth']
+        ocnmsk = self.grid['ocnmsk']
         fig = plt.figure(figsize=(20, 10))
         plt.rcParams.update({'font.size': 22})
         
         trans_fld = np.ones((len(depths), self.node_number))*np.nan
-        data = field.getData(maskas=np.nan)
+        data = zero2Nan(field.data*ocnmsk)
         for d in range(len(depths)):
             fld_slice = data[:,:,d]
             if scale=='symlog':
                 fld_slice = symlog10(zero2Nan(fld_slice))
-            if scale=='log':
+            elif scale=='log':
                 fld_slice = np.log10(zero2Nan(fld_slice))
+            else:
+                fld_slice = zero2Nan(fld_slice)
             trans_fld[d,:] = fld_slice.flatten()[self.trans_idx]
         
         X, Y = np.meshgrid(self.trans_dist, depths)
 
         if vmin is None:
-            vmin = np.floor(np.nanpercentile(trans_fld, 1)-1)
+            vmin = np.nanpercentile(trans_fld, 1)
         if vmax is None:
-            vmax = np.ceil(np.nanpercentile(trans_fld, 99)+1)
-        vmax = np.max((-vmin, vmax))
+            vmax = np.nanpercentile(trans_fld, 99)
         
         plt.gca().set_facecolor('dimgrey')
         if scale == 'log':
             cmap = 'viridis'
-            lev = np.linspace(vmin, vmax, 50)
+            lev = np.linspace(vmin, vmax, 100)
         else:
-            cmap = 'seismic'
             if vmin < 0:
+                vmax = np.max((-vmin, vmax))
                 vmin = -vmax
-            lev = np.linspace(vmin, vmax, 50)
+                cmap = 'seismic'
+            else:
+                cmap = 'viridis'
+            lev = np.linspace(vmin, vmax, 100)
         
         cs = plt.contourf(X, Y, trans_fld, lev, cmap=cmap, extend='both', **kwargs)
         ymin = depths[np.count_nonzero(np.nansum(trans_fld,1)) + 1] - 100
-        ymax = -10
+        ymax = depths[1]
         plt.ylim((ymin, ymax))
         
         cbar = plt.colorbar(cs)
         cbar.locator = ticker.AutoLocator()
-        cbar.set_ticks(cbar.locator.tick_values(lev[0], lev[-1]))
+        cbar.set_ticks(cbar.locator.tick_values(lev[1], lev[-2]))
         if scale == 'symlog':
-            cbar.set_ticklabels([r'$'+str(int(np.sign(exp)*10))+'^{'+str(int(abs(exp)))+r'}$' for exp in cbar.get_ticks()])
+            cbar.set_ticklabels([r'$'+str(int(np.sign(exp)*10))+'^{'+str(abs(exp))+r'}$' for exp in cbar.get_ticks()])
         elif scale == 'log':
-            cbar.set_ticklabels([r'$10^{'+str(int(exp))+r'}$' for exp in cbar.get_ticks()])
+            cbar.set_ticklabels([r'$10^{'+str(exp)+r'}$' for exp in cbar.get_ticks()])
         cbar.minorticks_off()
-        cbar.set_label(f'{field.getName()} ({field.getUnits()})')
+        cbar.set_label(f'{field.name} ({field.units})')
         plt.xlabel('Along-Track Distance (km)')
         plt.ylabel('Depth (m)')
-        plt.title(f'{field.getName(long=True)}\n along {self.name}')
+        if log == True:
+            plt.yscale('symlog')
+        plt.title(f'{field.long_name}\n along {self.name}')
         plt.tight_layout()
         
         if show:
@@ -637,7 +615,7 @@ class Transect:
             plt.close()
         return fig
     
-    def visualize_line(self, show=False):
+    def visualize_line(self, show=True):
         """ Plots the cross section on the map projection
 
         Parameters
@@ -675,7 +653,7 @@ class Transect:
             plt.close()
         return fig
 
-def visualize_average_profiles(fields, weighted=True, geometric=False, scale=None, show=False, **kwargs):
+def visualize_average_profiles(fields, weighted=True, geometric=False, scale=None, show=True, **kwargs):
     """ Plots the vertical average profiles of each field by region
 
     Parameters
@@ -701,10 +679,10 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
     z_means = {}
     w_means = {}
     for field in fields:
-        name = field.getName(long=True)
-        data = field.getData(maskas=np.nan)
+        name = field.long_name
+        data = field.data
         if weighted:
-            weights = field.getGrid('vol')
+            weights = field.grid('vol')
         else:
             weights = np.ones(np.shape(data))
         if geometric:
@@ -713,12 +691,12 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
             data = np.log10(zero2Nan(data))
         z_means[name] = {}
         w_means[name] = field.getMeans(weighted, geometric)
-        p = len(field.getGrid('Depth'))
+        p = len(field.grid('Depth'))
         for key in w_means[name].keys():
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    reg = field.getRegion(key)
+                    reg = field.region(key)
                     
                     z_means[name][key] = np.ones((p,1))*np.nan
                     mdata = zero2Nan(data*reg)
@@ -732,10 +710,10 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
     vec = np.ones((50,1))
     plt.rcParams.update({'font.size': 22})
     colors = plt.get_cmap('tab10')(np.arange(10, dtype=int))
-    for i, key in enumerate(z_means[fields[0].getName(long=True)].keys()):
+    for i, key in enumerate(z_means[fields[0].long_name].keys()):
         for j, field in enumerate(fields):
-            axes[i].plot(z_means[field.getName(long=True)][key][1:], field.getGrid('Depth')[1:], color=colors[j], marker='o', label=field.getName(long=True), **kwargs)
-            axes[i].plot(w_means[field.getName(long=True)][key]*vec, field.getGrid('Depth'), color=colors[j], linestyle='-.', **kwargs)
+            axes[i].plot(z_means[field.long_name][key][1:], field.grid('Depth')[1:], color=colors[j], marker='o', label=field.long_name, **kwargs)
+            axes[i].plot(w_means[field.long_name][key]*vec, field.grid('Depth'), color=colors[j], linestyle='-.', **kwargs)
             axes[i].set_title(key)
             axes[i].set_yscale('symlog')
             axes[i].grid(True)
@@ -745,9 +723,9 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
                 axes[i].set_xscale('log')
         
     axes[2].legend(loc='lower center', bbox_to_anchor=(0.5, -0.5))
-    plt.xlabel(fields[0].getName())
+    plt.xlabel(fields[0].name)
     axes[0].set_ylabel('Depth (m)')
-    st = plt.suptitle(f'{fields[0].getName()}\n{'Weighted ' if weighted else ''}{'Geometric ' if geometric else ''}Mean Profiles')
+    st = plt.suptitle(f'{fields[0].name}\n{'Weighted ' if weighted else ''}{'Geometric ' if geometric else ''}Mean Profiles')
     st.set_y(1)
     fig.subplots_adjust(top=0.85)
     plt.tight_layout()
@@ -758,24 +736,30 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
         plt.close()
     return fig
     
-def volumeCensus(xfield, yfield, show=False, **kwargs):
-    if np.shape(xfield.getData()) != np.shape(yfield.getData()):
+def volumeCensus(xfield, yfield, reg='ARC', contour=None, show=True, **kwargs):
+    if np.shape(xfield.data) != np.shape(yfield.data):
         print('Error: Fields must contain data of equal dimensions.')
-        print(f'Given {xfield.getName()}: {np.shape(xfield.getData())} and {yfield.getName()}: {np.shape(yfield.getData())}')
+        print(f'Given {xfield.name}: {np.shape(xfield.data)} and {yfield.name}: {np.shape(yfield.data)}')
         return None
-    xdata = xfield.getData(maskas=np.nan).flatten()
-    ydata = yfield.getData(maskas=np.nan).flatten()[~np.isnan(xdata)]
-    vol = 100*xfield.getGrid('vol').flatten()[~np.isnan(xdata)]/np.nansum(xfield.getGrid('vol'))
+    xdata = zero2Nan(xfield.data*xfield.region(reg)).flatten()
+    ydata = zero2Nan(yfield.data*yfield.region(reg)).flatten()[~np.isnan(xdata)]
+    vol = 100*xfield.grid('vol').flatten()[~np.isnan(xdata)]/np.nansum(zero2Nan(xfield.grid('vol')*xfield.region('ARC')))
     xdata = xdata[~np.isnan(xdata)]
 
     fig = plt.figure(figsize=(16, 8))
     plt.rcParams.update({'font.size': 22})
-    plt.hist2d(xdata, ydata, bins=100, weights=vol, cmap='ocean_r', norm='log', vmin=10**(-5), **kwargs)
+    hh = plt.hist2d(xdata, ydata, bins=100, weights=vol, cmap='ocean_r', norm='log', vmin=10**(-5), **kwargs)
     cbar = plt.colorbar(extend='both')
     cbar.set_label('% Arctic Ocean Volume')
-    plt.xlabel(f'{xfield.getName()} ({xfield.getUnits()})')
-    plt.ylabel(f'{yfield.getName()} ({yfield.getUnits()})')
-    plt.title(f'{yfield.getName(long=True)} and {xfield.getName()} Volume Census')
+    if contour is not None:
+        X, Y = np.meshgrid(hh[1], hh[2])
+        Z = contour['func'](X, Y, **contour['args'])
+        cs = plt.contour(X, Y, Z, levels=6, colors='black')
+        plt.clabel(cs, levels=cs.levels[2:], inline=True, rightside_up=False, fmt=lambda lev : rf'{lev:.0f} kg/m$^3$')
+    
+    plt.xlabel(f'{xfield.name} ({xfield.units})')
+    plt.ylabel(f'{yfield.name} ({yfield.units})')
+    plt.title(f'{yfield.long_name} and {xfield.name} {reg} Volume Census')
     plt.tight_layout()
         
     if show:
@@ -784,25 +768,25 @@ def volumeCensus(xfield, yfield, show=False, **kwargs):
         plt.close()
     return fig
 
-def anomalyVolumeCensus(xfields, yfields, show=False, **kwargs):
-    if np.shape(xfields[0].getData()) != np.shape(yfields[0].getData()):
+def anomalyVolumeCensus(xfields, yfields, reg='ARC', contour=None, show=True, **kwargs):
+    if np.shape(xfields[0].data) != np.shape(yfields[0].data):
         print('Error: Fields must contain data of equal dimensions.')
-        print(f'Given {xfields[0].getName()}: {np.shape(xfields[0].getData())} and {yfields[0].getName()}: {np.shape(yfields[0].getData())}')
-    if np.shape(xfields[1].getData()) != np.shape(yfields[1].getData()):
+        print(f'Given {xfields[0].name}: {np.shape(xfields[0].data)} and {yfields[0].name}: {np.shape(yfields[0].data)}')
+    if np.shape(xfields[1].data) != np.shape(yfields[1].data):
         print('Error: Fields must contain data of equal dimensions.')
-        print(f'Given {xfields[1].getName()}: {np.shape(xfields[1].getData())} and {yfields[1].getName()}: {np.shape(yfields[1].getData())}')
+        print(f'Given {xfields[1].name}: {np.shape(xfields[1].data)} and {yfields[1].name}: {np.shape(yfields[1].data)}')
     
-    xdata = xfields[0].getData(maskas=np.nan).flatten()
-    ydata = yfields[0].getData(maskas=np.nan).flatten()[~np.isnan(xdata)]
-    vol = 100*xfields[0].getGrid('vol').flatten()[~np.isnan(xdata)]/np.nansum(xfields[0].getGrid('vol'))
+    xdata = zero2Nan(xfields[0].data*xfields[0].region(reg)).flatten()
+    ydata = zero2Nan(yfields[0].data*yfields[0].region(reg)).flatten()[~np.isnan(xdata)]
+    vol = 100*xfields[0].grid('vol').flatten()[~np.isnan(xdata)]/np.nansum(zero2Nan(xfields[0].grid('vol')*xfields[0].region('ARC')))
     xdata = xdata[~np.isnan(xdata)]
     
     hh1 = plt.hist2d(xdata, ydata, bins=100, weights=vol, cmap='ocean_r', vmin=10**(-5), **kwargs)
     plt.close()
 
-    xdata = xfields[1].getData(maskas=np.nan).flatten()
-    ydata = yfields[1].getData(maskas=np.nan).flatten()[~np.isnan(xdata)]
-    vol = 100*xfields[1].getGrid('vol').flatten()[~np.isnan(xdata)]/np.nansum(xfields[1].getGrid('vol'))
+    xdata = zero2Nan(xfields[1].data*xfields[1].region(reg)).flatten()
+    ydata = zero2Nan(yfields[1].data*yfields[1].region(reg)).flatten()[~np.isnan(xdata)]
+    vol = 100*xfields[1].grid('vol').flatten()[~np.isnan(xdata)]/np.nansum(xfields[1].grid('vol'))
     xdata = xdata[~np.isnan(xdata)]
     
     kwargs['range'] = ((hh1[1][0], hh1[1][-1]), (hh1[2][0], hh1[2][-1]))
@@ -813,17 +797,22 @@ def anomalyVolumeCensus(xfields, yfields, show=False, **kwargs):
 
     fig = plt.figure(figsize=(16, 8))
     plt.rcParams.update({'font.size': 22})
-    h = symlog10(zero2Nan(hh1[0]-hh2[0]), -2).T
+    h = symlog10(zero2Nan(hh1[0]-hh2[0])).T
     vmax = np.max((np.nanpercentile(h, 99), -np.nanpercentile(h, 1)))
-    plt.pcolormesh(hh2[1], hh2[2], h, cmap='seismic', vmin=-vmax-.5, vmax=vmax+.5, **kwargs)
+    plt.pcolormesh(hh2[1], hh2[2], h, cmap='seismic', vmin=-1.5*vmax, vmax=1.5*vmax, **kwargs)
     cbar = plt.colorbar(extend='both')
     cbar.locator = ticker.AutoLocator()
     cbar.set_ticks(cbar.locator.tick_values(-vmax, vmax))
-    cbar.set_ticklabels([r'$'+str(int(np.sign(exp)*10))+'^{'+str(abs(exp))+r'}$' for exp in cbar.get_ticks()])
+    cbar.set_ticklabels([r'$'+str(int(np.sign(exp)*10))+'^{'+str(np.round(abs(exp),2))+r'}$' for exp in cbar.get_ticks()])
     cbar.set_label('Difference in % Arctic Ocean Volume')
-    plt.xlabel(f'{xfields[0].getName()} ({xfields[0].getUnits()})')
-    plt.ylabel(f'{yfields[0].getName()} ({yfields[0].getUnits()})')
-    plt.title(f'{yfields[0].getName(long=True).replace(yfields[0].getName(), "")} - {yfields[1].getName(long=True)} and {xfields[0].getName()} Volume Census')
+    if contour is not None:
+        X, Y = np.meshgrid(hh2[1], hh2[2])
+        Z = contour['func'](X, Y, **contour['args'])
+        cs = plt.contour(X, Y, Z, levels=6, colors='black')
+        plt.clabel(cs, levels=cs.levels[2:], inline=True, rightside_up=False, fmt=lambda lev : rf'{lev:.0f} kg/m$^3$')
+    plt.xlabel(f'{xfields[0].name} ({xfields[0].units})')
+    plt.ylabel(f'{yfields[0].name} ({yfields[0].units})')
+    plt.title(f'{yfields[0].long_name.replace(yfields[0].name, "")} - {yfields[1].long_name} and {xfields[0].name} {reg} Volume Census')
     plt.tight_layout()
         
     if show:

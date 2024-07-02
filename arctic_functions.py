@@ -1,4 +1,5 @@
 import numpy as np
+import gsw as gsw
 from scipy.spatial import KDTree
 
 def zero2Nan(arr):
@@ -17,7 +18,7 @@ def zero2Nan(arr):
     arr = np.where(arr==0, np.nan, arr)
     return arr
 
-def symlog10(arr, thresh=1):
+def symlog10(arr):
     """Take a symmetric log of a given array
     
     Parameters
@@ -33,7 +34,7 @@ def symlog10(arr, thresh=1):
         The symmetric log of the given array
     """
     sign = np.sign(arr)
-    mag = np.log10(1 + np.abs(arr)/(10**thresh))
+    mag = np.log10(1 + np.abs(arr))
     return sign*mag
 
 def yearAvg(data, var, yearRange):
@@ -138,128 +139,81 @@ def compute_mean(arr, w=None):
         return np.nan
     return arr_sum/w_sum
 
-def resample(oldgrid, olddata, newgrid):
-    ocnmsk = newgrid['ocnmsk']
-    m, n, p = np.shape(ocnmsk)
-    u, v, _ = np.shape(oldgrid['ocnmsk'])
-    r = int(u*v/(m*n))
-    lons = newgrid['lon']
-    lats = newgrid['lat']
-    grid_array = np.stack((oldgrid['lon'].flatten(), oldgrid['lat'].flatten()), axis=-1)
-    data = np.copy(olddata)
-    data[data > 10**3] = np.nan
-    targets = [[None, None]]
-    target_ids = [[None, None]]
+def nsquared(salinity, theta, lat, depth):
+    SA = salinity
+    CT = gsw.conversions.CT_from_pt(SA, theta)
+    m, n, p = np.shape(salt)
+    if np.shape(CT) != np.shape(SA) or len(depth) != p:
+        print(f'Dimensions do not match: Salinity has shape {np.shape(SA)}, Temperature has shape {np.shape(CT)}, and Depth has length {len(depth)}')
+        return None
+    P = np.moveaxis(gsw.conversions.p_from_z(np.moveaxis(np.ones((m, n, 50))*depth,-1,0),[np.array(lat)]*50),0,-1)
+    nsquared = np.ones((m, n, p))*np.nan
     for i in range(m):
         for j in range(n):
-            try:
-                data[i,j,:] = np.interp(newgrid['Depth'], oldgrid['Depth'][~np.isnan(data[i,j,:])], data[i,j,:][~np.isnan(data[i,j,:])])
-            except:
-                data[i,j,:] = np.nan
-            targets = np.append(targets, [[lons[i, j], lats[i, j]]], axis=0)
-            target_ids = np.append(target_ids, [[i, j]], axis=0)
-    targets = targets[1:]
-    target_ids = target_ids[1:]
-    
-    dist, idx = KDTree(grid_array).query(targets, k=r, workers=-1)
-    flat_data = np.array([data[:,:,k].flatten() for k in range(p)])
-    
-    newdata = np.ones((m, n, p))*np.nan
-    for x, target_id in enumerate(target_ids):
-        for k in range(p):
-            if ocnmsk[target_id[0], target_id[1], k] != 0:
-                newdata[target_id[0], target_id[1], k] = np.nanmean(flat_data[k][idx[x]])
-    return newdata
+            SA_slice = SA[i,j,:]
+            CT_slice = CT[i,j,:]
+            P_slice = P[i,j,:]
+            if sum(~np.isnan(SA_slice)) > 1:
+                P_slice = P_slice[~np.isnan(SA_slice)]
+                CT_slice = CT_slice[~np.isnan(SA_slice)]
+                idx = np.squeeze(np.argwhere(~np.isnan(SA_slice)))
+                SA_slice = SA_slice[~np.isnan(SA_slice)]
+                n2, _ = gsw.stability.Nsquared(SA_slice, CT_slice, P_slice)
+                nsquared[i,j,idx[0:len(n2)]] = n2
+    return nsquared
 
-def makeRegions(grid):
-    """Create regional logical arrays for the
-    * Eurasian Basin (EB), 
-    * Canadian Basin (CB), 
-    * Shelf (shelf), 
-    * Slope (slope), 
-    * Arctic Ocean (ARC), and 
-    * North Atlantic Ocean (NAt)
-    
-    Parameters
-    ----------
-    grid : dict
-        A dictionary of grid information such as cell coordinates
-        
-    Returns
-    -------
-    dict
-        A dictionary of regional logical 3darrays with keys in parenthesis above
-    """
-    ocnmsk = grid['ocnmsk']
-    depths = grid['Depth']
-    lats = grid['lat']
-    lons = grid['lon']
+def potentialDensity(salinity, theta, ref=0):
+    SA = salinity
+    CT = gsw.conversions.CT_from_pt(SA, theta)
+    if ref == 0:
+        func = gsw.density.sigma0
+    elif ref == 1000:
+        func = gsw.density.sigma1
+    elif ref == 2000:
+        func = gsw.density.sigma2
+    elif ref == 3000:
+        func = gsw.density.sigma3
+    elif ref == 4000:
+        func = gsw.density.sigma4
+    else:
+        print(f'{ref} dBar is an invalid reference pressure. Using 0 dBar.')
+        func = gsw.density.sigma0
+    return 1000 + func(SA, CT)
+
+def resample(old_data, old_grid, new_grid):
+    ocnmsk = new_grid['ocnmsk']
     m, n, p = np.shape(ocnmsk)
-    reg_logic = {}
-    for key in ['ARC', 'EB', 'CB', 'shelf', 'slope', 'NAt']:
-        reg_logic[key] = np.zeros((m, n, p))
-    
-    def isNAt(lat, lon, depth):
-        if depth < 0:
-            if (lat < 80 and lon > -50 and lon < 20):
-                return True
-            if (lat < 68 and (lon < -150 or lon > 170)):
-                return True
-        return False
-    
-    def isEB(lat, lon, depth):
-        if (lon >= -60 and lon <= 140):
-            if (lat >= 80 and depth < -3000):
-                return True
-            if lat > 85:
-                return True
-        return False
-    
-    def isCB(lat, lon, depth):
-        if(lon > -120 and lon < -60):
-            if (lat > 80 and depth < -3000):
-                return True
-            if lat > 85:
-                return True
-        if lon < -120:
-            if lat > 70 and depth < -3000:
-                return True
-            if lat > 80:
-                return True
-        if (lat > 82 and lon > 140):
-            return True
-        return False
-    
-    def isShelf(lat, lon, depth):
-        if depth > -500:
-            return True
-        if(lon > -90 and lon < -50 and lat < 80):
-            return True
-        return False
-    
-    for i in range(m):
-        for j in range(n):
-            for k in range(p):
-                if ocnmsk[i,j,k] == 0:
-                    lat = lats[i,j]
-                    lon = lons[i,j]
-                    depth = depths[k]
-                    if isNAt(lat, lon, depth):
-                        reg_logic['NAt'][i,j,:k] = 1
-                    else:
-                        reg_logic['ARC'][i,j,:k] = 1
-                        if isEB(lat, lon, depth):
-                            reg_logic['EB'][i,j,:k] = 1
-                        elif isCB(lat, lon, depth):
-                            reg_logic['CB'][i,j,:k] = 1
-                        elif isShelf(lat, lon, depth):
-                            reg_logic['shelf'][i,j,:k] = 1
-                        else:
-                            reg_logic['slope'][i,j,:k] = 1
-                    break
-    return reg_logic 
-    
-    
+    u, v, _ = np.shape(old_grid['ocnmsk'])
+    r = max(1, int(u*v/(m*n)))
+    grid_array = np.stack((old_grid['lon'].flatten('F'), old_grid['lat'].flatten('F')), axis=-1)
+    flat_data = old_data.reshape((-1, np.shape(old_data)[-1]), order='F')
+    targets = np.stack((new_grid['lon'].flatten('F'), new_grid['lat'].flatten('F')), axis=-1)
+    dist, idx = KDTree(grid_array).query(targets, k=r, workers=-1)
+    if r > 1:
+        new_data = np.nanmean(flat_data[idx], axis=1)
+    else:
+        new_data = flat_data[idx]
+    new_data = np.array([np.interp(np.abs(new_grid['Depth']), np.abs(old_grid['Depth']), new_data[i,:])
+                        for i in range(np.shape(new_data)[0])])
+        
+    new_data = new_data.reshape((m,n,p), order='F')
+    return new_data
+
+def makeRegions(old_regions, old_grid, new_grid):
+    ocnmsk = new_grid['ocnmsk']
+    m, n, p = np.shape(ocnmsk)
+    lons = new_grid['lon']
+    lats = new_grid['lat']
+    grid_array = np.stack((old_grid['lon'].flatten('F'), old_grid['lat'].flatten('F')), axis=-1)
+    flat_regions={}
+    for key in old_regions:
+        flat_regions[key] = old_regions[key][:,:,0].flatten('F')
+    targets = np.stack((lons.flatten('F'), lats.flatten('F')), axis=-1)
+    dist, idx = KDTree(grid_array).query(targets, workers=-1)
+    new_regions={}
+    for key in flat_regions:
+        new_regions[key] = np.moveaxis([(flat_regions[key][idx]).reshape((m,n), order='F')]*p, 0, -1)*ocnmsk
+    return new_regions
     
     
     
