@@ -37,7 +37,7 @@ def symlog10(arr):
     mag = np.log10(1 + np.abs(arr))
     return sign*mag
 
-def yearAvg(data, var, yearRange):
+def yearAvg(data, var, yearRange, months=None):
     """Compute the average of a given field over the given year range
 
     Parameters
@@ -56,7 +56,9 @@ def yearAvg(data, var, yearRange):
     """
     idxRange = (np.argwhere(np.array(data['Year']) == yearRange[0])[0,0], 
                 np.argwhere(np.array(data['Year']) == yearRange[1])[0,0])
-    return np.transpose(np.nanmean(data[var][idxRange[0]:idxRange[1]], axis=(0,1)))
+    if months is None:
+        months = np.arange(12)
+    return np.transpose(np.nanmean(data[var][idxRange[0]:1+idxRange[1], months], axis=(0,1)))
 
 def euclideanDist(p1, p2):
     """Compute the distance between two points according to the formula
@@ -109,6 +111,37 @@ def haversineDist(p1, p2):
 
     return 2*R*np.arcsin(np.sqrt(a))
 
+def zGradient(arr, z_coords, l=100):
+    """Compute a vertical gradient of three dimensional array
+
+    Parameters
+    ----------
+    arr : 3darray
+        The array of scalar data
+    z_coords: 1darray
+        The strictly increasing z coordinates of the data
+    l : int, (Default: 100)
+        Optional number of interpolated z coordinates
+        
+
+    Returns
+    -------
+    3darray
+        The vertical gradient of the data
+    """
+    (m, n, p) = np.shape(arr)
+    interp_arr = np.zeros((m, n, l+2))
+    interp_grad = np.zeros((m, n, l+1))
+    grad = np.zeros((m, n, p))
+    dz = np.abs(np.nanmax(z_coords) - np.nanmin(z_coords))/l
+    new_z = np.linspace(np.nanmin(z_coords-dz), np.nanmax(z_coords)+dz, l+2)
+    for i in range(m):
+        for j in range(n):
+            interp_arr[i,j,:] = np.interp(new_z, z_coords, arr[i,j,:])
+            interp_grad[i,j,:] = (interp_arr[i,j,:-1] - interp_arr[i,j,1:])/dz
+            grad[i,j,:] = np.interp(z_coords, new_z[:-1]+dz/2, interp_grad[i,j,:])
+    return grad
+
 def compute_mean(arr, w=None):
     """Compute a mean over three dimensions with the option for weighting
 
@@ -142,7 +175,7 @@ def compute_mean(arr, w=None):
 def nsquared(salinity, theta, lat, depth):
     SA = salinity
     CT = gsw.conversions.CT_from_pt(SA, theta)
-    m, n, p = np.shape(salt)
+    m, n, p = np.shape(SA)
     if np.shape(CT) != np.shape(SA) or len(depth) != p:
         print(f'Dimensions do not match: Salinity has shape {np.shape(SA)}, Temperature has shape {np.shape(CT)}, and Depth has length {len(depth)}')
         return None
@@ -183,10 +216,12 @@ def potentialDensity(salinity, theta, ref=0):
 def resample(old_data, old_grid, new_grid):
     ocnmsk = new_grid['ocnmsk']
     m, n, p = np.shape(ocnmsk)
-    u, v, _ = np.shape(old_grid['ocnmsk'])
-    r = max(1, int(u*v/(m*n)))
+    r = max(1, int(np.nanmean(new_grid['area'])/np.nanmean(old_grid['area'])))
     grid_array = np.stack((old_grid['lon'].flatten('F'), old_grid['lat'].flatten('F')), axis=-1)
     flat_data = old_data.reshape((-1, np.shape(old_data)[-1]), order='F')
+    nanmask = ~np.any(np.isnan(grid_array), axis=-1)
+    grid_array = grid_array[nanmask]
+    flat_data = flat_data[nanmask]
     targets = np.stack((new_grid['lon'].flatten('F'), new_grid['lat'].flatten('F')), axis=-1)
     dist, idx = KDTree(grid_array).query(targets, k=r, workers=-1)
     if r > 1:
@@ -202,17 +237,19 @@ def resample(old_data, old_grid, new_grid):
 def makeRegions(old_regions, old_grid, new_grid):
     ocnmsk = new_grid['ocnmsk']
     m, n, p = np.shape(ocnmsk)
-    lons = new_grid['lon']
-    lats = new_grid['lat']
     grid_array = np.stack((old_grid['lon'].flatten('F'), old_grid['lat'].flatten('F')), axis=-1)
+    
     flat_regions={}
     for key in old_regions:
         flat_regions[key] = old_regions[key][:,:,0].flatten('F')
-    targets = np.stack((lons.flatten('F'), lats.flatten('F')), axis=-1)
+    targets = np.stack((new_grid['lon'].flatten('F'), new_grid['lat'].flatten('F')), axis=-1)
+    nanmask = np.any(np.isnan(targets), axis=-1)
+    targets[np.isnan(targets)] = 0
     dist, idx = KDTree(grid_array).query(targets, workers=-1)
     new_regions={}
     for key in flat_regions:
         new_regions[key] = np.moveaxis([(flat_regions[key][idx]).reshape((m,n), order='F')]*p, 0, -1)*ocnmsk
+        new_regions[key][np.moveaxis([nanmask.reshape((m,n), order='F')]*p, 0, -1)] = 0
     return new_regions
     
     

@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.path as mpath
 from matplotlib import ticker
 from scipy.spatial import KDTree
+import scipy.io as sio
 import warnings
 
 class Field:
@@ -26,7 +27,7 @@ class Field:
     reg_logic : dict, optional
         The regional logicals are used to divide the data into regions
     """
-    def __init__(self, desc, name, units, grid, data, reg_logic=None):
+    def __init__(self, desc, name, units, data, grid, reg_logic=None):
         self._name = name
         self._long_name = desc +' '+ name
         self._units = units
@@ -92,6 +93,7 @@ class Field:
                 ref = self._means
         if alt_data is None:
             if ref is not None:
+                print(f'Retrieving existing {"weighted " if weighted else ""}{"geometric " if geometric else ""}means for {self._long_name}')
                 return ref
             else:
                 data = self._data
@@ -102,6 +104,7 @@ class Field:
             if np.any(data < 0):
                 print('Warning: attempting a geometric mean on signed data is not advised. Negative data will be ignored.')
             data = np.log10(zero2Nan(data))
+        print(f'Computing {"weighted " if weighted else ""}{"geometric " if geometric else ""}means for {self._long_name}')
         for region in ['ARC', 'CB', 'EB', 'basin', 'shelf', 'slope']:
             if region == 'basin':
                 means['basin'] = compute_mean(zero2Nan(data*(self._reg_logic['CB'] +
@@ -111,7 +114,16 @@ class Field:
             if geometric:
                 means[region] = 10**means[region]
         if alt_data is None:
-            ref = means
+            if weighted:
+                if geometric:
+                    self._weighted_geo_means = means
+                else:
+                    self._weighted_means = means
+            else:
+                if geometric:
+                    self._geo_means = means
+                else:
+                    self._means = means
         return means
     
     def grid(self, key):
@@ -314,7 +326,7 @@ class Field:
             plt.close()
         return fig
 
-    def visualize_maps(self, scale=None, show=True, vmin=None, vmax=None, **kwargs):
+    def visualize_maps(self, scale=None, show=True, vmin=None, vmax=None, idepth=None, transect=None, **kwargs):
         """ Plots maps of the field for all depths
 
         Parameters
@@ -340,7 +352,6 @@ class Field:
             warnings.simplefilter("ignore")
             if scale == 'symlog':
                 data = symlog10(zero2Nan(data))
-                vmin = -1*vmax
             elif scale == 'log':
                 data = np.log10(zero2Nan(data))
             else:
@@ -360,9 +371,7 @@ class Field:
                 cmap = 'seismic'
             else:
                 cmap = 'viridis'
-        lev = np.linspace(vmin, vmax, 100)
-
-        
+        dc = (vmax - vmin)/10
         lons = self._grid['lon']
         lats = self._grid['lat']
     
@@ -371,39 +380,68 @@ class Field:
         verts = np.vstack([np.sin(theta), np.cos(theta)]).T
         circle = mpath.Path(verts * radius + center)
 
-        fig, axes = plt.subplots(int(p/4), 4, 
-                                 figsize=(24, 5*int(p/4)), subplot_kw={'projection': ccrs.NorthPolarStereo()})
-        plt.rcParams.update({'font.size': 22})
-        for i, depth in enumerate(self._grid['Depth']):
-            if i < 4*int(p/4):
-                ax = axes[int(i/4), int(i%4)]
-                data_slice = data[:,:,i]
-                plt.set_cmap(cmap)
-                if not np.all(np.isnan(data_slice)):
-                    pcm = ax.pcolormesh(lons, lats, data_slice, transform=ccrs.PlateCarree(), vmin=vmin, vmax=vmax, **kwargs)
-                    ax.set_extent([-180, 180, 90, 60], ccrs.PlateCarree())
-                    ax.coastlines()
-                    ax.gridlines(lw=1, ls=':', draw_labels=True, rotate_labels=False, xlocs=np.linspace(-180, 180, 13), ylocs=[])
-                    ax.set_boundary(circle, transform=ax.transAxes)
-                    ax.set_title(f'z = {np.abs(depth):.3}')
-                else:
-                    ax.set_axis_off()
+        if idepth is None:
+            fig, axes = plt.subplots(int(p/4), 4, 
+                                     figsize=(24, 5*int(p/4)), subplot_kw={'projection': ccrs.NorthPolarStereo()})
+            plt.rcParams.update({'font.size': 22})
+            for i, depth in enumerate(self._grid['Depth']):
+                if i < 4*int(p/4):
+                    ax = axes[int(i%int(p/4)), int(i/int(p/4))]
+                    data_slice = data[:,:,i]
+                    plt.set_cmap(cmap)
+                    if not np.all(np.isnan(data_slice)):
+                        pcm = ax.pcolormesh(lons, lats, data_slice, transform=ccrs.PlateCarree(), vmin=vmin, vmax=vmax, **kwargs)
+                        ax.set_extent([-180, 180, 90, 60], ccrs.PlateCarree())
+                        ax.coastlines()
+                        ax.gridlines(lw=1, ls=':', draw_labels=True, rotate_labels=False, ylocs=[])
+                        if transect is not None:
+                            ax.plot(transect.line[:,0], transect.line[:,1], 'r')
+                        ax.set_boundary(circle, transform=ax.transAxes)
+                        ax.set_title(f'z = {depth:.0f} m')
+                    else:
+                        ax.set_axis_off()
+                
+            st = plt.suptitle(f'{self._long_name} Arctic Map')
+            plt.tight_layout()
+            cbar = fig.colorbar(pcm, ax=axes[0,:], location='top', extend='both')
+            cbar.locator = ticker.AutoLocator()
+            cbar.set_ticks(cbar.locator.tick_values(vmin+dc, vmax-dc))
+            if scale == 'symlog':
+                cbar.set_ticklabels(['0' if exp == 0 else r'$'+str(int(np.sign(exp)*10))+'^{'+str(abs(round(exp, 2)))+r'}$' for exp in cbar.get_ticks()])
+            elif scale == 'log':
+                cbar.set_ticklabels([r'$10^{'+str(round(exp, 2))+r'}$' for exp in cbar.get_ticks()])
+            cbar.minorticks_off()
+            cbar.set_label(f'{self._name} ({self._units})')
+    
+            st.set_y(1)
+            fig.subplots_adjust(top=0.94)
+        else:
+            fig, ax = plt.subplots(figsize=(10, 12), subplot_kw={'projection': ccrs.NorthPolarStereo()})
+            plt.rcParams.update({'font.size': 22})
+            data_slice = data[:,:,idepth]
+            plt.set_cmap(cmap)
+            if not np.all(np.isnan(data_slice)):
+                pcm = ax.pcolormesh(lons, lats, data_slice, transform=ccrs.PlateCarree(), vmin=vmin, vmax=vmax, **kwargs)
+                ax.set_extent([-180, 180, 90, 60], ccrs.PlateCarree())
+                ax.coastlines()
+                ax.gridlines(lw=1, ls=':', draw_labels=True, rotate_labels=False, ylocs=[])
+                if transect is not None:
+                    ax.plot(transect.line[:,0], transect.line[:,1], 'r')
+                ax.set_boundary(circle, transform=ax.transAxes)
+                ax.set_title(f'z = {self._grid['Depth'][idepth]:.0f} m')
+            else:
+                ax.set_axis_off()
             
-        st = plt.suptitle(f'{self._long_name} Arctic Map')
+            cbar = fig.colorbar(pcm, ax=ax, location='bottom', extend='both')
+            cbar.locator = ticker.AutoLocator()
+            cbar.set_ticks(cbar.locator.tick_values(vmin+dc, vmax-dc))
+            if scale == 'symlog':
+                cbar.set_ticklabels(['0' if exp == 0 else r'$'+str(int(np.sign(exp)*10))+'^{'+str(abs(round(exp, 2)))+r'}$' for exp in cbar.get_ticks()])
+            elif scale == 'log':
+                cbar.set_ticklabels([r'$10^{'+str(round(exp, 2))+r'}$' for exp in cbar.get_ticks()])
+            cbar.minorticks_off()
+            cbar.set_label(f'{self._name} ({self._units})')
         plt.tight_layout()
-        cbar = fig.colorbar(pcm, ax=axes[0,:], location='top', extend='both')
-        cbar.locator = ticker.AutoLocator()
-        cbar.set_ticks(cbar.locator.tick_values(vmin, vmax))
-        if scale == 'symlog':
-            cbar.set_ticklabels([r'$'+str(int(np.sign(exp)*10))+'^{'+str(int(abs(exp)))+r'}$' for exp in cbar.get_ticks()])
-        elif scale == 'log':
-            cbar.set_ticklabels([r'$10^{'+str(int(exp))+r'}$' for exp in cbar.get_ticks()])
-        cbar.minorticks_off()
-        cbar.set_label(f'{self._name} ({self._units})')
-
-        st.set_y(1)
-        fig.subplots_adjust(top=0.94)
-            
         if show:
             plt.show()
         else:
@@ -527,7 +565,7 @@ class Transect:
             trans_dist[i] = trans_dist[i-1] + haversineDist(trans_array[i-1], trans_array[i])
         self.trans_dist = trans_dist
         
-    def visualize_transect(self, field, log=True, scale=None,  show=True, **kwargs):
+    def visualize_transect(self, field, log=True, scale=None, contour=False, show=True, vmin=None, vmax=None, idepth=0, **kwargs):
         """ Plots the given field along the cross section
 
         Parameters
@@ -553,11 +591,16 @@ class Transect:
         """
         depths = self.grid['Depth']
         ocnmsk = self.grid['ocnmsk']
-        fig = plt.figure(figsize=(20, 10))
+        data = zero2Nan(field.data*ocnmsk)
+        lons = field.grid('lon')
+        lats = field.grid('lat')
+        
         plt.rcParams.update({'font.size': 22})
+        fig = plt.figure(figsize=(28, 10))
+        
+        ax = fig.add_subplot(122) 
         
         trans_fld = np.ones((len(depths), self.node_number))*np.nan
-        data = zero2Nan(field.data*ocnmsk)
         for d in range(len(depths)):
             fld_slice = data[:,:,d]
             if scale=='symlog':
@@ -575,7 +618,7 @@ class Transect:
         if vmax is None:
             vmax = np.nanpercentile(trans_fld, 99)
         
-        plt.gca().set_facecolor('dimgrey')
+        ax.set_facecolor('dimgrey')
         if scale == 'log':
             cmap = 'viridis'
             lev = np.linspace(vmin, vmax, 100)
@@ -587,64 +630,58 @@ class Transect:
             else:
                 cmap = 'viridis'
             lev = np.linspace(vmin, vmax, 100)
+
+        dc = (vmax - vmin)/10
         
-        cs = plt.contourf(X, Y, trans_fld, lev, cmap=cmap, extend='both', **kwargs)
+        cs = ax.contourf(X, Y, trans_fld, lev, cmap=cmap, extend='both', **kwargs)
+        if contour:
+            cr = ax.contour(X, Y, trans_fld, 6, colors='k', linestyles='dashed')
+            ax.clabel(cr, cr.levels, inline=True, fontsize=18)
         ymin = depths[np.count_nonzero(np.nansum(trans_fld,1)) + 1] - 100
-        ymax = depths[1]
-        plt.ylim((ymin, ymax))
+        ymax = depths[min(np.count_nonzero(np.all(np.isnan(trans_fld), 1)) + 1, 49)]
+        ax.set_ylim((ymin, ymax))
         
         cbar = plt.colorbar(cs)
         cbar.locator = ticker.AutoLocator()
-        cbar.set_ticks(cbar.locator.tick_values(lev[1], lev[-2]))
+        cbar.set_ticks(cbar.locator.tick_values(vmin+dc, vmax-dc))
         if scale == 'symlog':
-            cbar.set_ticklabels([r'$'+str(int(np.sign(exp)*10))+'^{'+str(abs(exp))+r'}$' for exp in cbar.get_ticks()])
+            cbar.set_ticklabels(['0' if exp == 0 else r'$'+str(int(np.sign(exp)*10))+'^{'+str(abs(round(exp, 2)))+r'}$' for exp in cbar.get_ticks()])
         elif scale == 'log':
-            cbar.set_ticklabels([r'$10^{'+str(exp)+r'}$' for exp in cbar.get_ticks()])
+            cbar.set_ticklabels([r'$10^{'+str(round(exp, 2))+r'}$' for exp in cbar.get_ticks()])
         cbar.minorticks_off()
         cbar.set_label(f'{field.name} ({field.units})')
-        plt.xlabel('Along-Track Distance (km)')
-        plt.ylabel('Depth (m)')
+        ax.set_xlabel('Along-Track Distance (km)')
+        ax.set_ylabel('Depth (m)')
         if log == True:
             plt.yscale('symlog')
-        plt.title(f'{field.long_name}\n along {self.name}')
-        plt.tight_layout()
+        ax.set_title(f'{field.long_name}\n along {self.name}')
         
-        if show:
-            plt.show()
-        else:
-            plt.close()
-        return fig
-    
-    def visualize_line(self, show=True):
-        """ Plots the cross section on the map projection
+        ax = fig.add_subplot(121, projection=ccrs.NorthPolarStereo())
 
-        Parameters
-        ----------
-        self : Transect
-            The cross section to plot the data along
-        show : boolean, default False
-            Whether to display the figure
-
-        Returns
-        -------
-        fig
-            A figure with the cross section on a map projection
-        """
-        fig, ax = plt.subplots(figsize=(6, 6), subplot_kw={'projection': ccrs.NorthPolarStereo()})
-        
         theta = np.linspace(0, 2*np.pi, 100)
         center, radius = [0.5, 0.5], 0.5
         verts = np.vstack([np.sin(theta), np.cos(theta)]).T
         circle = mpath.Path(verts * radius + center)
-        
-        ax.coastlines()
-        ax.stock_img()
-        ax.gridlines(lw=1, ls=':', draw_labels=True, rotate_labels=False, xlocs=np.linspace(-180, 180, 13), ylocs=[])
-        ax.set_boundary(circle, transform=ax.transAxes)
-        ax.plot(self.line[:,0], self.line[:,1], 'r')
-        ax.set_extent([-180, 180, 90, 60], self.base)
-        
-        plt.title(self.name)
+
+        data_slice = data[:,:,idepth]
+        if scale=='symlog':
+            data_slice = symlog10(zero2Nan(data_slice))
+        elif scale=='log':
+            data_slice = np.log10(zero2Nan(data_slice))
+        else:
+            data_slice = zero2Nan(data_slice)
+        if not np.all(np.isnan(data_slice)):
+            pcm = ax.pcolormesh(lons, lats, data_slice, transform=ccrs.PlateCarree(), vmin=vmin, vmax=vmax, cmap=cmap, **kwargs)
+            ax.set_extent([-180, 180, 90, 60], ccrs.PlateCarree())
+            ax.coastlines()
+            ax.gridlines(lw=1, ls=':', draw_labels=True, rotate_labels=False, ylocs=[80, 75, 70, 65])
+            ax.plot(self.line[:,0], self.line[:,1], 'k', linewidth=3)
+            ax.set_boundary(circle, transform=ax.transAxes)
+            ax.set_title(f'z = {np.abs(field.grid('Depth')[idepth]):.0f} m')
+        else:
+            ax.set_axis_off()
+            
+        plt.subplots_adjust(wspace=None, hspace=None)
         plt.tight_layout()
         
         if show:
@@ -652,6 +689,7 @@ class Transect:
         else:
             plt.close()
         return fig
+
 
 def visualize_average_profiles(fields, weighted=True, geometric=False, scale=None, show=True, **kwargs):
     """ Plots the vertical average profiles of each field by region
@@ -706,7 +744,7 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
                         z_means[name][key] = 10**z_means[name][key]
             except:
                 continue
-    fig, axes = plt.subplots(1, 5, sharey=True, figsize=(36,12))
+    fig, axes = plt.subplots(1, 5, sharey=True, figsize=(42,12))
     vec = np.ones((50,1))
     plt.rcParams.update({'font.size': 22})
     colors = plt.get_cmap('tab10')(np.arange(10, dtype=int))
@@ -723,7 +761,7 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
                 axes[i].set_xscale('log')
         
     axes[2].legend(loc='lower center', bbox_to_anchor=(0.5, -0.5))
-    plt.xlabel(fields[0].name)
+    axes[0].set_xlabel(f'{fields[0].name} ({fields[0].units})')
     axes[0].set_ylabel('Depth (m)')
     st = plt.suptitle(f'{fields[0].name}\n{'Weighted ' if weighted else ''}{'Geometric ' if geometric else ''}Mean Profiles')
     st.set_y(1)
@@ -742,10 +780,13 @@ def volumeCensus(xfield, yfield, reg='ARC', contour=None, show=True, **kwargs):
         print(f'Given {xfield.name}: {np.shape(xfield.data)} and {yfield.name}: {np.shape(yfield.data)}')
         return None
     xdata = zero2Nan(xfield.data*xfield.region(reg)).flatten()
-    ydata = zero2Nan(yfield.data*yfield.region(reg)).flatten()[~np.isnan(xdata)]
+    ydata = (yfield.data*zero2Nan(yfield.region(reg))).flatten()[~np.isnan(xdata)]
     vol = 100*xfield.grid('vol').flatten()[~np.isnan(xdata)]/np.nansum(zero2Nan(xfield.grid('vol')*xfield.region('ARC')))
     xdata = xdata[~np.isnan(xdata)]
-
+    xdata = xdata[~np.isnan(ydata)]
+    vol = vol[~np.isnan(ydata)]
+    ydata = ydata[~np.isnan(ydata)]
+    
     fig = plt.figure(figsize=(16, 8))
     plt.rcParams.update({'font.size': 22})
     hh = plt.hist2d(xdata, ydata, bins=100, weights=vol, cmap='ocean_r', norm='log', vmin=10**(-5), **kwargs)
@@ -768,7 +809,7 @@ def volumeCensus(xfield, yfield, reg='ARC', contour=None, show=True, **kwargs):
         plt.close()
     return fig
 
-def anomalyVolumeCensus(xfields, yfields, reg='ARC', contour=None, show=True, **kwargs):
+def anomalyVolumeCensus(xfields, yfields, reg='ARC', scale=None, contour=None, show=True, range=None, vmin=None, vmax=None):
     if np.shape(xfields[0].data) != np.shape(yfields[0].data):
         print('Error: Fields must contain data of equal dimensions.')
         print(f'Given {xfields[0].name}: {np.shape(xfields[0].data)} and {yfields[0].name}: {np.shape(yfields[0].data)}')
@@ -778,32 +819,43 @@ def anomalyVolumeCensus(xfields, yfields, reg='ARC', contour=None, show=True, **
     
     xdata = zero2Nan(xfields[0].data*xfields[0].region(reg)).flatten()
     ydata = zero2Nan(yfields[0].data*yfields[0].region(reg)).flatten()[~np.isnan(xdata)]
-    vol = 100*xfields[0].grid('vol').flatten()[~np.isnan(xdata)]/np.nansum(zero2Nan(xfields[0].grid('vol')*xfields[0].region('ARC')))
+    vol = (100*xfields[0].grid('vol')).flatten()[~np.isnan(xdata)]/np.nansum(zero2Nan(xfields[0].grid('vol')*xfields[0].region('ARC')))
     xdata = xdata[~np.isnan(xdata)]
+    xdata = xdata[~np.isnan(ydata)]
+    vol = vol[~np.isnan(ydata)]
+    ydata = ydata[~np.isnan(ydata)]
     
-    hh1 = plt.hist2d(xdata, ydata, bins=100, weights=vol, cmap='ocean_r', vmin=10**(-5), **kwargs)
+    hh1 = plt.hist2d(xdata, ydata, bins=100, weights=vol, cmap='ocean_r', range=range)
     plt.close()
 
     xdata = zero2Nan(xfields[1].data*xfields[1].region(reg)).flatten()
     ydata = zero2Nan(yfields[1].data*yfields[1].region(reg)).flatten()[~np.isnan(xdata)]
-    vol = 100*xfields[1].grid('vol').flatten()[~np.isnan(xdata)]/np.nansum(xfields[1].grid('vol'))
+    vol = 100*xfields[1].grid('vol').flatten()[~np.isnan(xdata)]/np.nansum(zero2Nan(xfields[1].grid('vol')*xfields[1].region('ARC')))
     xdata = xdata[~np.isnan(xdata)]
-    
-    kwargs['range'] = ((hh1[1][0], hh1[1][-1]), (hh1[2][0], hh1[2][-1]))
 
-    hh2 = plt.hist2d(xdata, ydata, bins=100, weights=vol, cmap='ocean_r', vmin=10**(-5), **kwargs)
+    range = ((hh1[1][0], hh1[1][-1]), (hh1[2][0], hh1[2][-1]))
+
+    hh2 = plt.hist2d(xdata, ydata, bins=100, weights=vol, cmap='ocean_r', range=range)
     plt.close()
-    kwargs.pop('range')
-
+    
     fig = plt.figure(figsize=(16, 8))
     plt.rcParams.update({'font.size': 22})
-    h = symlog10(zero2Nan(hh1[0]-hh2[0])).T
-    vmax = np.max((np.nanpercentile(h, 99), -np.nanpercentile(h, 1)))
-    plt.pcolormesh(hh2[1], hh2[2], h, cmap='seismic', vmin=-1.5*vmax, vmax=1.5*vmax, **kwargs)
+    if scale == 'symlog':
+        h = symlog10(zero2Nan(hh1[0]-hh2[0])).T
+    else:
+        h = (zero2Nan(hh1[0]-hh2[0])).T
+    if vmax is None:
+        vmax = np.max((np.nanpercentile(h, 99), -np.nanpercentile(h, 1)))
+    if vmin is None:
+        vmin = -vmax
+    dc = (vmax - vmin)/10
+
+    plt.pcolormesh(hh2[1], hh2[2], h, cmap='seismic', vmin=vmin-dc, vmax=vmax+dc)
     cbar = plt.colorbar(extend='both')
     cbar.locator = ticker.AutoLocator()
-    cbar.set_ticks(cbar.locator.tick_values(-vmax, vmax))
-    cbar.set_ticklabels([r'$'+str(int(np.sign(exp)*10))+'^{'+str(np.round(abs(exp),2))+r'}$' for exp in cbar.get_ticks()])
+    cbar.set_ticks(cbar.locator.tick_values(vmin, vmax))
+    if scale == 'symlog':
+        cbar.set_ticklabels([r'$'+str(int(np.sign(exp)*10))+'^{'+str(np.round(abs(exp),2))+r'}$' for exp in cbar.get_ticks()])
     cbar.set_label('Difference in % Arctic Ocean Volume')
     if contour is not None:
         X, Y = np.meshgrid(hh2[1], hh2[2])
@@ -812,7 +864,7 @@ def anomalyVolumeCensus(xfields, yfields, reg='ARC', contour=None, show=True, **
         plt.clabel(cs, levels=cs.levels[2:], inline=True, rightside_up=False, fmt=lambda lev : rf'{lev:.0f} kg/m$^3$')
     plt.xlabel(f'{xfields[0].name} ({xfields[0].units})')
     plt.ylabel(f'{yfields[0].name} ({yfields[0].units})')
-    plt.title(f'{yfields[0].long_name.replace(yfields[0].name, "")} - {yfields[1].long_name} and {xfields[0].name} {reg} Volume Census')
+    plt.title(f'{yfields[0].long_name.replace(yfields[0].name, "")} - {yfields[1].long_name} and {xfields[0].name}\n {reg} Volume Census')
     plt.tight_layout()
         
     if show:
