@@ -139,7 +139,7 @@ def zGradient(arr, z_coords, l=100):
         for j in range(n):
             interp_arr[i,j,:] = np.interp(new_z, z_coords, arr[i,j,:])
             interp_grad[i,j,:] = (interp_arr[i,j,:-1] - interp_arr[i,j,1:])/dz
-            grad[i,j,:] = np.interp(z_coords, new_z[:-1]+dz/2, interp_grad[i,j,:])
+            grad[i,j,:-1] = np.interp(z_coords - dz/2, new_z[:-1]+dz/2, interp_grad[i,j,:])[1:]
     return grad
 
 def compute_mean(arr, w=None):
@@ -172,10 +172,12 @@ def compute_mean(arr, w=None):
         return np.nan
     return arr_sum/w_sum
 
-def nsquared(salinity, theta, lat, depth):
-    SA = salinity
+def nsquared(salinity, theta, lat, lon, depth):
+    m, n, p = np.shape(salinity)
+    P = np.moveaxis(gsw.conversions.p_from_z(np.moveaxis(np.ones((m, n, 50))*depth,-1,0),[np.array(lat)]*50),0,-1)
+    SA = salinity #gsw.conversions.SA_from_SP(salinity, P, np.moveaxis([np.array(lat)]*50, 0, -1), np.moveaxis([np.array(lon)]*50, 0, -1))
     CT = gsw.conversions.CT_from_pt(SA, theta)
-    m, n, p = np.shape(SA)
+    
     if np.shape(CT) != np.shape(SA) or len(depth) != p:
         print(f'Dimensions do not match: Salinity has shape {np.shape(SA)}, Temperature has shape {np.shape(CT)}, and Depth has length {len(depth)}')
         return None

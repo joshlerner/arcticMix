@@ -60,7 +60,7 @@ class Field:
     def units(self):
         return self._units
         
-    def getMeans(self, weighted, geometric, alt_data=None):
+    def getMeans(self, weighted, geometric, force=False):
         """Computes the regional means of a field, or loads precomputed means
 
         Parameters
@@ -91,14 +91,11 @@ class Field:
                 ref = self._geo_means
             else:
                 ref = self._means
-        if alt_data is None:
+        if not force:
             if ref is not None:
                 print(f'Retrieving existing {"weighted " if weighted else ""}{"geometric " if geometric else ""}means for {self._long_name}')
                 return ref
-            else:
-                data = self._data
-        else:
-            data = alt_data
+        data = self._data
         means = {}
         if geometric:
             if np.any(data < 0):
@@ -113,17 +110,16 @@ class Field:
                 means[region] = compute_mean(zero2Nan(data*self._reg_logic[region]), w=weights)
             if geometric:
                 means[region] = 10**means[region]
-        if alt_data is None:
-            if weighted:
-                if geometric:
-                    self._weighted_geo_means = means
-                else:
-                    self._weighted_means = means
+        if weighted:
+            if geometric:
+                self._weighted_geo_means = means
             else:
-                if geometric:
-                    self._geo_means = means
-                else:
-                    self._means = means
+                self._weighted_means = means
+        else:
+            if geometric:
+                self._geo_means = means
+            else:
+                self._means = means
         return means
     
     def grid(self, key):
@@ -565,7 +561,7 @@ class Transect:
             trans_dist[i] = trans_dist[i-1] + haversineDist(trans_array[i-1], trans_array[i])
         self.trans_dist = trans_dist
         
-    def visualize_transect(self, field, log=True, scale=None, contour=False, show=True, vmin=None, vmax=None, idepth=0, **kwargs):
+    def visualize_transect(self, field, log=True, scale=None, contour=False, show=True, vmin=None, vmax=None, idepth=None, **kwargs):
         """ Plots the given field along the cross section
 
         Parameters
@@ -596,7 +592,7 @@ class Transect:
         lats = field.grid('lat')
         
         plt.rcParams.update({'font.size': 22})
-        fig = plt.figure(figsize=(28, 10))
+        fig = plt.figure(figsize=(28, 8))
         
         ax = fig.add_subplot(122) 
         
@@ -638,7 +634,7 @@ class Transect:
             cr = ax.contour(X, Y, trans_fld, 6, colors='k', linestyles='dashed')
             ax.clabel(cr, cr.levels, inline=True, fontsize=18)
         ymin = depths[np.count_nonzero(np.nansum(trans_fld,1)) + 1] - 100
-        ymax = depths[min(np.count_nonzero(np.all(np.isnan(trans_fld), 1)) + 1, 49)]
+        ymax = -15#depths[min(np.count_nonzero(np.all(np.isnan(trans_fld), 1)) + 1, 49)]
         ax.set_ylim((ymin, ymax))
         
         cbar = plt.colorbar(cs)
@@ -655,31 +651,32 @@ class Transect:
         if log == True:
             plt.yscale('symlog')
         ax.set_title(f'{field.long_name}\n along {self.name}')
-        
-        ax = fig.add_subplot(121, projection=ccrs.NorthPolarStereo())
 
-        theta = np.linspace(0, 2*np.pi, 100)
-        center, radius = [0.5, 0.5], 0.5
-        verts = np.vstack([np.sin(theta), np.cos(theta)]).T
-        circle = mpath.Path(verts * radius + center)
-
-        data_slice = data[:,:,idepth]
-        if scale=='symlog':
-            data_slice = symlog10(zero2Nan(data_slice))
-        elif scale=='log':
-            data_slice = np.log10(zero2Nan(data_slice))
-        else:
-            data_slice = zero2Nan(data_slice)
-        if not np.all(np.isnan(data_slice)):
-            pcm = ax.pcolormesh(lons, lats, data_slice, transform=ccrs.PlateCarree(), vmin=vmin, vmax=vmax, cmap=cmap, **kwargs)
-            ax.set_extent([-180, 180, 90, 60], ccrs.PlateCarree())
-            ax.coastlines()
-            ax.gridlines(lw=1, ls=':', draw_labels=True, rotate_labels=False, ylocs=[80, 75, 70, 65])
-            ax.plot(self.line[:,0], self.line[:,1], 'k', linewidth=3)
-            ax.set_boundary(circle, transform=ax.transAxes)
-            ax.set_title(f'z = {np.abs(field.grid('Depth')[idepth]):.0f} m')
-        else:
-            ax.set_axis_off()
+        if idepth is not None:
+            ax = fig.add_subplot(121, projection=ccrs.NorthPolarStereo())
+    
+            theta = np.linspace(0, 2*np.pi, 100)
+            center, radius = [0.5, 0.5], 0.5
+            verts = np.vstack([np.sin(theta), np.cos(theta)]).T
+            circle = mpath.Path(verts * radius + center)
+    
+            data_slice = data[:,:,idepth]
+            if scale=='symlog':
+                data_slice = symlog10(zero2Nan(data_slice))
+            elif scale=='log':
+                data_slice = np.log10(zero2Nan(data_slice))
+            else:
+                data_slice = zero2Nan(data_slice)
+            if not np.all(np.isnan(data_slice)):
+                pcm = ax.pcolormesh(lons, lats, data_slice, transform=ccrs.PlateCarree(), vmin=vmin, vmax=vmax, cmap=cmap, **kwargs)
+                ax.set_extent([-180, 180, 90, 60], ccrs.PlateCarree())
+                ax.coastlines()
+                ax.gridlines(lw=1, ls=':', draw_labels=True, rotate_labels=False, ylocs=[80, 75, 70, 65])
+                ax.plot(self.line[:,0], self.line[:,1], 'k', linewidth=3)
+                ax.set_boundary(circle, transform=ax.transAxes)
+                ax.set_title(f'z = {np.abs(field.grid('Depth')[idepth]):.0f} m')
+            else:
+                ax.set_axis_off()
             
         plt.subplots_adjust(wspace=None, hspace=None)
         plt.tight_layout()
@@ -691,7 +688,7 @@ class Transect:
         return fig
 
 
-def visualize_average_profiles(fields, weighted=True, geometric=False, scale=None, show=True, **kwargs):
+def visualize_average_profiles(fields, weighted=True, geometric=False, scale=None, show=True, force=False, **kwargs):
     """ Plots the vertical average profiles of each field by region
 
     Parameters
@@ -728,7 +725,7 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
                 print('Warning: attempting a geometric mean on signed data is not advised. Negative data will be ignored.')
             data = np.log10(zero2Nan(data))
         z_means[name] = {}
-        w_means[name] = field.getMeans(weighted, geometric)
+        w_means[name] = field.getMeans(weighted, geometric, force)
         p = len(field.grid('Depth'))
         for key in w_means[name].keys():
             try:
@@ -744,13 +741,13 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
                         z_means[name][key] = 10**z_means[name][key]
             except:
                 continue
-    fig, axes = plt.subplots(1, 5, sharey=True, figsize=(42,12))
-    vec = np.ones((50,1))
     plt.rcParams.update({'font.size': 22})
+    fig, axes = plt.subplots(1, 5, sharey=True, figsize=(32,16))
+    vec = np.ones((50,1))
     colors = plt.get_cmap('tab10')(np.arange(10, dtype=int))
     for i, key in enumerate(z_means[fields[0].long_name].keys()):
         for j, field in enumerate(fields):
-            axes[i].plot(z_means[field.long_name][key][1:], field.grid('Depth')[1:], color=colors[j], marker='o', label=field.long_name, **kwargs)
+            axes[i].plot(z_means[field.long_name][key][1:], field.grid('Depth')[1:], color=colors[j], marker='o', label=field.long_name.replace(field.name, ''), **kwargs)
             axes[i].plot(w_means[field.long_name][key]*vec, field.grid('Depth'), color=colors[j], linestyle='-.', **kwargs)
             axes[i].set_title(key)
             axes[i].set_yscale('symlog')
