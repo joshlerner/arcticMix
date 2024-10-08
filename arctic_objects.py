@@ -32,7 +32,7 @@ class Field:
         self._long_name = desc +' '+ name
         self._units = units
         self._grid = grid
-        self._data = zero2Nan(data*grid['ocnmsk'])
+        self._data = data*zero2Nan(grid['ocnmsk'])
         if reg_logic is None:
             self._reg_logic = makeRegions(grid)
         else:
@@ -185,7 +185,7 @@ class Field:
             Whether to use geometric means
         scale : str, optional
             Apply either a 'log' or 'symlog' scaling to the data
-        show : boolean, default False
+        show : boolean, default True
             Whether to display the figure
         **kwargs
             Additional parameters are passed to the `matplotlib.pyplot.plot` method
@@ -216,7 +216,7 @@ class Field:
                 z_means[k] = np.ones((p,1))*np.nan
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    mdata = zero2Nan(data*self._reg_logic[k])
+                    mdata = data*zero2Nan(self._reg_logic[k])
                     for j in range(p):
                         z_means[k][j] = compute_mean(mdata[:,:,j:j+1], w=weights[:,:,j:j+1])
                     if geometric:
@@ -254,7 +254,7 @@ class Field:
             The field of data
         scale : str, optional
             Apply either a 'log' or 'symlog' scaling to the data
-        show : boolean, default False
+        show : boolean, default True
             Whether to display the figure
         **kwargs
             Additional parameters are passed to the `matplotlib.pyplot.hist` method
@@ -322,7 +322,7 @@ class Field:
             plt.close()
         return fig
 
-    def visualize_maps(self, scale=None, show=True, vmin=None, vmax=None, idepth=None, transect=None, **kwargs):
+    def visualize_maps(self, scale=None, show=True, vmin=None, vmax=None, **kwargs):
         """ Plots maps of the field for all depths
 
         Parameters
@@ -331,7 +331,7 @@ class Field:
             The field of data
         scale : str, optional
             Apply either a 'log' or 'symlog' scaling to the data
-        show : boolean, default False
+        show : boolean, default True
             Whether to display the figure
         **kwargs
             Additional parameters are passed to the `matplotlib.pyplot.hist` method
@@ -350,8 +350,6 @@ class Field:
                 data = symlog10(zero2Nan(data))
             elif scale == 'log':
                 data = np.log10(zero2Nan(data))
-            else:
-                data = zero2Nan(data)
                 
         if vmin is None:
             vmin = np.nanpercentile(data, 1)
@@ -367,7 +365,6 @@ class Field:
                 cmap = 'seismic'
             else:
                 cmap = 'viridis'
-        dc = (vmax - vmin)/10
         lons = self._grid['lon']
         lats = self._grid['lat']
     
@@ -376,68 +373,39 @@ class Field:
         verts = np.vstack([np.sin(theta), np.cos(theta)]).T
         circle = mpath.Path(verts * radius + center)
 
-        if idepth is None:
-            fig, axes = plt.subplots(int(p/4), 4, 
-                                     figsize=(24, 5*int(p/4)), subplot_kw={'projection': ccrs.NorthPolarStereo()})
-            plt.rcParams.update({'font.size': 22})
-            for i, depth in enumerate(self._grid['Depth']):
-                if i < 4*int(p/4):
-                    ax = axes[int(i%int(p/4)), int(i/int(p/4))]
-                    data_slice = data[:,:,i]
-                    plt.set_cmap(cmap)
-                    if not np.all(np.isnan(data_slice)):
-                        pcm = ax.pcolormesh(lons, lats, data_slice, transform=ccrs.PlateCarree(), vmin=vmin, vmax=vmax, **kwargs)
-                        ax.set_extent([-180, 180, 90, 60], ccrs.PlateCarree())
-                        ax.coastlines()
-                        ax.gridlines(lw=1, ls=':', draw_labels=True, rotate_labels=False, ylocs=[])
-                        if transect is not None:
-                            ax.plot(transect.line[:,0], transect.line[:,1], 'r')
-                        ax.set_boundary(circle, transform=ax.transAxes)
-                        ax.set_title(f'z = {depth:.0f} m')
-                    else:
-                        ax.set_axis_off()
+        dc = (vmax - vmin)/10
+
+        fig, axes = plt.subplots(int(p/4), 4, figsize=(24, 5*int(p/4)), subplot_kw={'projection': ccrs.NorthPolarStereo()})
+        plt.rcParams.update({'font.size': 22})
+        for i, depth in enumerate(self._grid['Depth']):
+            if i < 4*int(p/4):
+                ax = axes[int(i%int(p/4)), int(i/int(p/4))]
+                data_slice = data[:,:,i]
+                plt.set_cmap(cmap)
+                if not np.all(np.isnan(data_slice)):
+                    pcm = ax.pcolormesh(lons, lats, data_slice, transform=ccrs.PlateCarree(), vmin=vmin-dc, vmax=vmax+dc, **kwargs)
+                    ax.set_extent([-180, 180, 90, 60], ccrs.PlateCarree())
+                    ax.coastlines()
+                    ax.gridlines(lw=1, ls=':', draw_labels=True, rotate_labels=False, ylocs=[])
+                    ax.set_boundary(circle, transform=ax.transAxes)
+                    ax.set_title(f'z = {depth:.0f} m')
+                else:
+                    ax.set_axis_off()
                 
-            st = plt.suptitle(f'{self._long_name} Arctic Map')
-            plt.tight_layout()
-            cbar = fig.colorbar(pcm, ax=axes[0,:], location='top', extend='both')
-            cbar.locator = ticker.AutoLocator()
-            cbar.set_ticks(cbar.locator.tick_values(vmin+dc, vmax-dc))
-            if scale == 'symlog':
-                cbar.set_ticklabels(['0' if exp == 0 else r'$'+str(int(np.sign(exp)*10))+'^{'+str(abs(round(exp, 2)))+r'}$' for exp in cbar.get_ticks()])
-            elif scale == 'log':
-                cbar.set_ticklabels([r'$10^{'+str(round(exp, 2))+r'}$' for exp in cbar.get_ticks()])
-            cbar.minorticks_off()
-            cbar.set_label(f'{self._name} ({self._units})')
-    
-            st.set_y(1)
-            fig.subplots_adjust(top=0.94)
-        else:
-            fig, ax = plt.subplots(figsize=(10, 12), subplot_kw={'projection': ccrs.NorthPolarStereo()})
-            plt.rcParams.update({'font.size': 22})
-            data_slice = data[:,:,idepth]
-            plt.set_cmap(cmap)
-            if not np.all(np.isnan(data_slice)):
-                pcm = ax.pcolormesh(lons, lats, data_slice, transform=ccrs.PlateCarree(), vmin=vmin, vmax=vmax, **kwargs)
-                ax.set_extent([-180, 180, 90, 60], ccrs.PlateCarree())
-                ax.coastlines()
-                ax.gridlines(lw=1, ls=':', draw_labels=True, rotate_labels=False, ylocs=[])
-                if transect is not None:
-                    ax.plot(transect.line[:,0], transect.line[:,1], 'r')
-                ax.set_boundary(circle, transform=ax.transAxes)
-                ax.set_title(f'z = {self._grid['Depth'][idepth]:.0f} m')
-            else:
-                ax.set_axis_off()
-            
-            cbar = fig.colorbar(pcm, ax=ax, location='bottom', extend='both')
-            cbar.locator = ticker.AutoLocator()
-            cbar.set_ticks(cbar.locator.tick_values(vmin+dc, vmax-dc))
-            if scale == 'symlog':
-                cbar.set_ticklabels(['0' if exp == 0 else r'$'+str(int(np.sign(exp)*10))+'^{'+str(abs(round(exp, 2)))+r'}$' for exp in cbar.get_ticks()])
-            elif scale == 'log':
-                cbar.set_ticklabels([r'$10^{'+str(round(exp, 2))+r'}$' for exp in cbar.get_ticks()])
-            cbar.minorticks_off()
-            cbar.set_label(f'{self._name} ({self._units})')
+        st = plt.suptitle(f'{self._long_name} Arctic Map')
         plt.tight_layout()
+        cbar = fig.colorbar(pcm, ax=axes[0,:], location='top', extend='both')
+        cbar.locator = ticker.AutoLocator()
+        cbar.set_ticks(cbar.locator.tick_values(vmin, vmax))
+        if scale == 'symlog':
+            cbar.set_ticklabels(['0' if exp == 0 else r'$'+str(int(np.sign(exp)*10))+'^{'+str(abs(round(exp, 2)))+r'}$' for exp in cbar.get_ticks()])
+        elif scale == 'log':
+            cbar.set_ticklabels([r'$10^{'+str(round(exp, 2))+r'}$' for exp in cbar.get_ticks()])
+        cbar.minorticks_off()
+        cbar.set_label(f'{self._name} ({self._units})')
+    
+        st.set_y(1)
+        fig.subplots_adjust(top=0.94)
         if show:
             plt.show()
         else:
@@ -489,7 +457,7 @@ class KappaBG(Field):
             return self._data
         kappa += self._reg_logic['NAt']*6.6e-6
         kappa = zero2Nan(kappa)
-        kappa = zero2Nan(kappa*ocnmsk)
+        kappa = kappa*zero2Nan(ocnmsk)
         if np.any(np.equal(ocnmsk > 0, np.isnan(kappa))):
             print('Error: there are ocean grid cells that do not contain a kappa value')
         return kappa
@@ -576,7 +544,7 @@ class Transect:
             The minimum value to display on the colorbar
         vmax : float, optional
             The maximum value to display on the colorbar
-        show : boolean, default False
+        show : boolean, default True
             Whether to display the figure
         **kwargs
             Additional parameters are passed to the `matplotlib.pyplot.contourf` method
@@ -587,7 +555,7 @@ class Transect:
         """
         depths = self.grid['Depth']
         ocnmsk = self.grid['ocnmsk']
-        data = zero2Nan(field.data*ocnmsk)
+        data = field.data*zero2Nan(ocnmsk)
         lons = field.grid('lon')
         lats = field.grid('lat')
         
@@ -603,8 +571,7 @@ class Transect:
                 fld_slice = symlog10(zero2Nan(fld_slice))
             elif scale=='log':
                 fld_slice = np.log10(zero2Nan(fld_slice))
-            else:
-                fld_slice = zero2Nan(fld_slice)
+
             trans_fld[d,:] = fld_slice.flatten()[self.trans_idx]
         
         X, Y = np.meshgrid(self.trans_dist, depths)
@@ -665,8 +632,7 @@ class Transect:
                 data_slice = symlog10(zero2Nan(data_slice))
             elif scale=='log':
                 data_slice = np.log10(zero2Nan(data_slice))
-            else:
-                data_slice = zero2Nan(data_slice)
+
             if not np.all(np.isnan(data_slice)):
                 pcm = ax.pcolormesh(lons, lats, data_slice, transform=ccrs.PlateCarree(), vmin=vmin, vmax=vmax, cmap=cmap, **kwargs)
                 ax.set_extent([-180, 180, 90, 60], ccrs.PlateCarree())
@@ -688,7 +654,7 @@ class Transect:
         return fig
 
 
-def visualize_average_profiles(fields, weighted=True, geometric=False, scale=None, show=True, force=False, **kwargs):
+def visualize_average_profiles(fields, weighted=True, geometric=False, scale=None, show=True, colors=None, **kwargs):
     """ Plots the vertical average profiles of each field by region
 
     Parameters
@@ -701,8 +667,10 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
         Whether to use geometric means
     scale : str, optional
         Apply either a 'log' or 'symlog' scaling to the data
-    show : boolean, default False
+    show : boolean, default True
         Whether to display the figure
+    colors : array, optional
+        The colors to use when differentiating fields
     **kwargs
         Additional parameters are passed to the `matplotlib.pyplot.plot` method
 
@@ -712,7 +680,6 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
         A figure with the vertical averge profiles of each field by region
     """
     z_means = {}
-    w_means = {}
     for field in fields:
         name = field.long_name
         data = field.data
@@ -724,17 +691,16 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
             if np.any(data < 0):
                 print('Warning: attempting a geometric mean on signed data is not advised. Negative data will be ignored.')
             data = np.log10(zero2Nan(data))
-        z_means[name] = {}
-        w_means[name] = field.getMeans(weighted, geometric, force)
+        z_means[name] = {'ARC': None, 'CB': None, 'EB': None, 'shelf': None, 'slope': None}
         p = len(field.grid('Depth'))
-        for key in w_means[name].keys():
+        for key in z_means[name].keys():
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     reg = field.region(key)
                     
                     z_means[name][key] = np.ones((p,1))*np.nan
-                    mdata = zero2Nan(data*reg)
+                    mdata = data*zero2Nan(reg)
                     for k in range(p):
                         z_means[name][key][k] = compute_mean(mdata[:,:,k:k+1], w=weights[:,:,k:k+1])
                     if geometric:
@@ -743,12 +709,11 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
                 continue
     plt.rcParams.update({'font.size': 22})
     fig, axes = plt.subplots(1, 5, sharey=True, figsize=(32,16))
-    vec = np.ones((50,1))
-    colors = plt.get_cmap('tab10')(np.arange(10, dtype=int))
+    if colors is None:
+        colors = plt.get_cmap('tab10')(np.arange(10, dtype=int))
     for i, key in enumerate(z_means[fields[0].long_name].keys()):
         for j, field in enumerate(fields):
             axes[i].plot(z_means[field.long_name][key][1:], field.grid('Depth')[1:], color=colors[j], marker='o', label=field.long_name.replace(field.name, ''), **kwargs)
-            axes[i].plot(w_means[field.long_name][key]*vec, field.grid('Depth'), color=colors[j], linestyle='-.', **kwargs)
             axes[i].set_title(key)
             axes[i].set_yscale('symlog')
             axes[i].grid(True)
@@ -772,11 +737,33 @@ def visualize_average_profiles(fields, weighted=True, geometric=False, scale=Non
     return fig
     
 def volumeCensus(xfield, yfield, reg='ARC', contour=None, show=True, **kwargs):
+    """ Plots a Volume Census (2D-Histogram) of two fields
+
+    Parameters
+    ----------
+    xfield : Field
+        The field to be binned on the x-axis
+    yfield : Field
+        The field to be binned on the y-axis
+    reg : str (Default: 'ARC')
+        The region to perform the volume census over
+    contour : func, optional
+        A function of the fields to use as a contour
+    show : boolean, default True
+        Whether to display the figure
+    **kwargs
+        Additional parameters are passed to the `matplotlib.pyplot.hist2d` method
+
+    Returns
+    -------
+    fig
+        A figure with the volume census of two fields
+    """
     if np.shape(xfield.data) != np.shape(yfield.data):
         print('Error: Fields must contain data of equal dimensions.')
         print(f'Given {xfield.name}: {np.shape(xfield.data)} and {yfield.name}: {np.shape(yfield.data)}')
         return None
-    xdata = zero2Nan(xfield.data*xfield.region(reg)).flatten()
+    xdata = (xfield.data*zero2Nan(xfield.region(reg))).flatten()
     ydata = (yfield.data*zero2Nan(yfield.region(reg))).flatten()[~np.isnan(xdata)]
     vol = 100*xfield.grid('vol').flatten()[~np.isnan(xdata)]/np.nansum(zero2Nan(xfield.grid('vol')*xfield.region('ARC')))
     xdata = xdata[~np.isnan(xdata)]
@@ -807,6 +794,34 @@ def volumeCensus(xfield, yfield, reg='ARC', contour=None, show=True, **kwargs):
     return fig
 
 def anomalyVolumeCensus(xfields, yfields, reg='ARC', scale=None, contour=None, show=True, range=None, vmin=None, vmax=None):
+    """ Plots a Volume Census (2D-Histogram) of the anomaly between a pair of two fields
+
+    Parameters
+    ----------
+    xfields: list(Field)
+        The fields to be binned on the x-axis
+    yfields : list(Field)
+        The fields to be binned on the y-axis
+    reg : str (Default: 'ARC')
+        The region to perform the volume census over
+    scale : str, optional
+        The scale of the colorbar, can be None or 'symlog'
+    contour : func, optional
+        A function of the fields to use as a contour
+    show : boolean, default True
+        Whether to display the figure
+    range : tuple, optional
+        The data range to include on the x and y axes
+    vmin : float, optional
+        The minimum value to display on the colorbar
+    vmax : float, optional
+        The maximum value to display on the colorbar
+
+    Returns
+    -------
+    fig
+        A figure with the anomaly volume census of two field
+    """
     if np.shape(xfields[0].data) != np.shape(yfields[0].data):
         print('Error: Fields must contain data of equal dimensions.')
         print(f'Given {xfields[0].name}: {np.shape(xfields[0].data)} and {yfields[0].name}: {np.shape(yfields[0].data)}')
@@ -814,8 +829,8 @@ def anomalyVolumeCensus(xfields, yfields, reg='ARC', scale=None, contour=None, s
         print('Error: Fields must contain data of equal dimensions.')
         print(f'Given {xfields[1].name}: {np.shape(xfields[1].data)} and {yfields[1].name}: {np.shape(yfields[1].data)}')
     
-    xdata = zero2Nan(xfields[0].data*xfields[0].region(reg)).flatten()
-    ydata = zero2Nan(yfields[0].data*yfields[0].region(reg)).flatten()[~np.isnan(xdata)]
+    xdata = (xfields[0].data*zero2Nan(xfields[0].region(reg))).flatten()
+    ydata = (yfields[0].data*zero2Nan(yfields[0].region(reg))).flatten()[~np.isnan(xdata)]
     vol = (100*xfields[0].grid('vol')).flatten()[~np.isnan(xdata)]/np.nansum(zero2Nan(xfields[0].grid('vol')*xfields[0].region('ARC')))
     xdata = xdata[~np.isnan(xdata)]
     xdata = xdata[~np.isnan(ydata)]
@@ -825,8 +840,8 @@ def anomalyVolumeCensus(xfields, yfields, reg='ARC', scale=None, contour=None, s
     hh1 = plt.hist2d(xdata, ydata, bins=100, weights=vol, cmap='ocean_r', range=range)
     plt.close()
 
-    xdata = zero2Nan(xfields[1].data*xfields[1].region(reg)).flatten()
-    ydata = zero2Nan(yfields[1].data*yfields[1].region(reg)).flatten()[~np.isnan(xdata)]
+    xdata = (xfields[1].data*zero2Nan(xfields[1].region(reg))).flatten()
+    ydata = (yfields[1].data*zero2Nan(yfields[1].region(reg))).flatten()[~np.isnan(xdata)]
     vol = 100*xfields[1].grid('vol').flatten()[~np.isnan(xdata)]/np.nansum(zero2Nan(xfields[1].grid('vol')*xfields[1].region('ARC')))
     xdata = xdata[~np.isnan(xdata)]
 

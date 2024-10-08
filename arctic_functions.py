@@ -111,19 +111,18 @@ def haversineDist(p1, p2):
 
     return 2*R*np.arcsin(np.sqrt(a))
 
-def zGradient(arr, z_coords, l=100):
+def zGradient(arr, grid, l=500):
     """Compute a vertical gradient of three dimensional array
 
     Parameters
     ----------
     arr : 3darray
         The array of scalar data
-    z_coords: 1darray
-        The strictly increasing z coordinates of the data
-    l : int, (Default: 100)
-        Optional number of interpolated z coordinates
+    grid : dict
+        The dictionary of cell grid data
+    l: int (Default: 500)
+        Optional number of interpolation points. Increase for a smoother derivative.
         
-
     Returns
     -------
     3darray
@@ -133,13 +132,23 @@ def zGradient(arr, z_coords, l=100):
     interp_arr = np.zeros((m, n, l+2))
     interp_grad = np.zeros((m, n, l+1))
     grad = np.zeros((m, n, p))
+    ocnmsk = grid['ocnmsk']
+    z_coords = np.abs(grid['Depth'])
     dz = np.abs(np.nanmax(z_coords) - np.nanmin(z_coords))/l
     new_z = np.linspace(np.nanmin(z_coords-dz), np.nanmax(z_coords)+dz, l+2)
     for i in range(m):
         for j in range(n):
             interp_arr[i,j,:] = np.interp(new_z, z_coords, arr[i,j,:])
             interp_grad[i,j,:] = (interp_arr[i,j,:-1] - interp_arr[i,j,1:])/dz
-            grad[i,j,:-1] = np.interp(z_coords - dz/2, new_z[:-1]+dz/2, interp_grad[i,j,:])[1:]
+            grad[i,j,:] = np.interp(z_coords, new_z[:-1]+dz/2, interp_grad[i,j,:])
+    grad = grad*zero2Nan(ocnmsk)
+    for i in range(m):
+        for j in range(n):
+            nans = np.where(np.isnan(grad[i,j,:]))[0]
+            idx = -1
+            if len(nans) > 0:
+                idx = np.min(nans) - 1
+            grad[i,j,idx] = np.nan
     return grad
 
 def compute_mean(arr, w=None):
@@ -172,10 +181,30 @@ def compute_mean(arr, w=None):
         return np.nan
     return arr_sum/w_sum
 
-def nsquared(salinity, theta, lat, lon, depth):
+def nsquared(salinity, theta, grid):
+    """Compute the stratification (Squared Brunt-Väisälä Frequency) from Practical Salinity and Potential Temperature
+    
+    Parameters
+    ----------
+    salinity : 3darray
+        The Practical Salinity field of the data
+    theta : 3darray
+        The Potential Temperature field of the data
+    grid : dict
+        The dictionary of grid cell data
+        
+    Returns
+    -------
+    3darray
+        The stratification field of the data
+    """
+    lat = grid['lat']
+    lon = grid['lon'] + 180
+    depth = grid['Depth']
+    ocnmsk = grid['ocnmsk']
     m, n, p = np.shape(salinity)
     P = np.moveaxis(gsw.conversions.p_from_z(np.moveaxis(np.ones((m, n, 50))*depth,-1,0),[np.array(lat)]*50),0,-1)
-    SA = salinity #gsw.conversions.SA_from_SP(salinity, P, np.moveaxis([np.array(lat)]*50, 0, -1), np.moveaxis([np.array(lon)]*50, 0, -1))
+    SA = gsw.conversions.SA_from_SP(salinity, P, np.moveaxis([np.array(lon)]*50, 0, -1), np.moveaxis([np.array(lat)]*50, 0, -1))
     CT = gsw.conversions.CT_from_pt(SA, theta)
     
     if np.shape(CT) != np.shape(SA) or len(depth) != p:
@@ -195,9 +224,33 @@ def nsquared(salinity, theta, lat, lon, depth):
                 SA_slice = SA_slice[~np.isnan(SA_slice)]
                 n2, _ = gsw.stability.Nsquared(SA_slice, CT_slice, P_slice)
                 nsquared[i,j,idx[0:len(n2)]] = n2
+    nsquared = nsquared*zero2Nan(ocnmsk)
+    for i in range(m):
+        for j in range(n):
+            nans = np.where(np.isnan(nsquared[i,j,:]))[0]
+            idx = 0
+            if len(nans) > 0:
+                idx = np.min(nans)
+            nsquared[i,j,idx-2:] = np.nan
     return nsquared
 
 def potentialDensity(salinity, theta, ref=0):
+    """Compute the Potential Density from the Practical Salinity and Potential Temperature
+    
+    Parameters
+    ----------
+    salinity : 3darray
+        The Practical Salinity field of the data
+    theta : 3darray
+        The Potential Temperature field of the data
+    ref : One of {0, 1000, 2000, 3000, 4000} (Default: 0)
+        The reference pressure
+        
+    Returns
+    -------
+    3darray
+        The stratification field of the data
+    """
     SA = salinity
     CT = gsw.conversions.CT_from_pt(SA, theta)
     if ref == 0:
@@ -216,6 +269,22 @@ def potentialDensity(salinity, theta, ref=0):
     return 1000 + func(SA, CT)
 
 def resample(old_data, old_grid, new_grid):
+    """Resample a data field from an old grid onto a new grid of a different size
+
+    Parameters
+    ----------
+    old_data : 3darray
+        The original data field to be resampled
+    old_grid : dict
+        The grid cell data of the original grid
+    new_grid : dict
+        The new grid cell data to resample onto
+
+    Returns
+    -------
+    3darray
+        The resampled data on the new grid
+    """
     ocnmsk = new_grid['ocnmsk']
     m, n, p = np.shape(ocnmsk)
     r = max(1, int(np.nanmean(new_grid['area'])/np.nanmean(old_grid['area'])))
@@ -237,6 +306,22 @@ def resample(old_data, old_grid, new_grid):
     return new_data
 
 def makeRegions(old_regions, old_grid, new_grid):
+    """Resample Arctic Regional Logicals from an old grid onto a new grid of a different size
+
+    Parameters
+    ----------
+    old_regions : dict
+        The original Arctic Regional Logicals to be resampled
+    old_grid : dict
+        The grid cell data of the original grid
+    new_grid : dict
+        The new grid cell data to resample onto
+
+    Returns
+    -------
+    3darray
+        The resampled Arctic Regional Logicals on the new grid
+    """
     ocnmsk = new_grid['ocnmsk']
     m, n, p = np.shape(ocnmsk)
     grid_array = np.stack((old_grid['lon'].flatten('F'), old_grid['lat'].flatten('F')), axis=-1)
@@ -250,6 +335,7 @@ def makeRegions(old_regions, old_grid, new_grid):
     dist, idx = KDTree(grid_array).query(targets, workers=-1)
     new_regions={}
     for key in flat_regions:
+        flat_regions[key][idx[dist > 2]] = 0 # MAGIC NUMBER! ONLY for making ASTE and MIT work
         new_regions[key] = np.moveaxis([(flat_regions[key][idx]).reshape((m,n), order='F')]*p, 0, -1)*ocnmsk
         new_regions[key][np.moveaxis([nanmask.reshape((m,n), order='F')]*p, 0, -1)] = 0
     return new_regions
