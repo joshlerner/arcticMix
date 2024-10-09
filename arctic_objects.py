@@ -229,6 +229,9 @@ class Field:
         plt.xlabel(f'{self._name} ({self._units})')
         if scale == 'symlog':
             plt.xscale('symlog')
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                plt.gca().set_xticklabels([int(np.sign(tick.get_position()[0])*1) if abs(tick.get_position()[0]) == 1 else int(np.sign(tick.get_position()[0])*10) if abs(tick.get_position()[0]) == 10 else tick.get_text() for tick in plt.gca().get_xticklabels()])
         elif scale == 'log':
             plt.xscale('log')
     
@@ -299,7 +302,7 @@ class Field:
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
                         if scale == 'symlog':
-                            ax.set_xticklabels([r'$'+str(int(np.sign(exp)*10))+'^{'+str(int(abs(exp)))+r'}$' 
+                            ax.set_xticklabels([r'$'+str(int(np.sign(exp)*10))+'^{'+str(int(abs(exp)))+r'}$' if abs(exp) > 1 else '10' if exp > 0 else '1' 
                                                 for exp in ax.get_xticks()])
                         elif scale == 'log':
                             ax.set_xticklabels([r'$10^{'+str(int(exp))+r'}$' 
@@ -608,7 +611,7 @@ class Transect:
         cbar.locator = ticker.AutoLocator()
         cbar.set_ticks(cbar.locator.tick_values(vmin+dc, vmax-dc))
         if scale == 'symlog':
-            cbar.set_ticklabels(['0' if exp == 0 else r'$'+str(int(np.sign(exp)*10))+'^{'+str(abs(round(exp, 2)))+r'}$' for exp in cbar.get_ticks()])
+            cbar.set_ticklabels([int(np.sign(exp)*1) if abs(exp) == 0 else int(np.sign(exp)*10) if abs(exp) == 1 else r'$'+str(int(np.sign(exp)*10))+'^{'+str(abs(round(exp, 2)))+r'}$' for exp in cbar.get_ticks()])
         elif scale == 'log':
             cbar.set_ticklabels([r'$10^{'+str(round(exp, 2))+r'}$' for exp in cbar.get_ticks()])
         cbar.minorticks_off()
